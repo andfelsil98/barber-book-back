@@ -1,0 +1,85 @@
+import type { NextFunction, Request, Response } from "express";
+import { DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from "../../domain/interfaces/pagination.interface";
+import { validateCreateBusinessCompleteDto } from "./dtos/create-business-complete.dto";
+import { validateUpdateBusinessDto } from "./dtos/update-business.dto";
+import type { BusinessService } from "../services/business.service";
+import { envs } from "../../config/envs";
+import { CustomError } from "../../domain/errors/custom-error";
+
+export class BusinessController {
+  constructor(private readonly businessService: BusinessService) {}
+
+  public getAll = (req: Request, res: Response, next: NextFunction) => {
+    const pageRaw = req.query.page != null ? Number(req.query.page) : DEFAULT_PAGE;
+    const pageSizeRaw = req.query.pageSize != null ? Number(req.query.pageSize) : DEFAULT_PAGE_SIZE;
+    if (Number.isNaN(pageRaw) || pageRaw < 1) {
+      res.status(400).json({ message: "page debe ser un entero positivo" });
+      return;
+    }
+    if (Number.isNaN(pageSizeRaw) || pageSizeRaw < 1) {
+      res.status(400).json({ message: "pageSize debe ser un entero positivo" });
+      return;
+    }
+    const pageSize = Math.min(MAX_PAGE_SIZE, pageSizeRaw);
+    const id =
+      typeof req.query.id === "string" && req.query.id.trim() !== ""
+        ? req.query.id.trim()
+        : undefined;
+    this.businessService
+      .getAllBusinesses({ page: pageRaw, pageSize, ...(id != null && { id }) })
+      .then((result) => {
+        res.status(200).json(result);
+      })
+      .catch(next);
+  };
+
+  public create = (req: Request, res: Response, next: NextFunction) => {
+    const email = req.decodedIdToken?.email;
+    if (!email) {
+      next(CustomError.unauthorized("Token de sesión inválido: email no presente en el token."));
+      return;
+    }
+
+    if (email !== envs.ROOT_USER_EMAIL) {
+      next(CustomError.forbidden("No tienes permisos para crear negocios."));
+      return;
+    }
+
+    const dto = validateCreateBusinessCompleteDto(req.body);
+    this.businessService
+      .createBusinessComplete(dto)
+      .then((result) => {
+        res.status(201).json(result);
+      })
+      .catch(next);
+  };
+
+  public update = (req: Request, res: Response, next: NextFunction) => {
+    const id = req.params.id;
+    if (!id) {
+      res.status(400).json({ message: "El id del negocio es requerido" });
+      return;
+    }
+    const dto = validateUpdateBusinessDto(req.body);
+    this.businessService
+      .updateBusiness(id, dto)
+      .then((business) => {
+        res.status(200).json(business);
+      })
+      .catch(next);
+  };
+
+  public deleteBusiness = (req: Request, res: Response, next: NextFunction) => {
+    const id = req.params.id;
+    if (!id) {
+      res.status(400).json({ message: "El id del negocio es requerido" });
+      return;
+    }
+    this.businessService
+      .deleteBusiness(id)
+      .then((business) => {
+        res.status(200).json(business);
+      })
+      .catch(next);
+  };
+}

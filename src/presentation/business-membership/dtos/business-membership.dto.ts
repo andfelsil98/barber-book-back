@@ -1,0 +1,42 @@
+import { CustomError } from "../../../domain/errors/custom-error";
+
+export interface AssignRoleDto {
+  membershipId: string;
+  roleId: string;
+}
+
+export function validateMembershipIdParam(id: unknown): string {
+  if (id == null || typeof id !== "string" || id.trim() === "") {
+    throw CustomError.badRequest(
+      "El parámetro id es requerido y debe ser un texto no vacío"
+    );
+  }
+  return id.trim();
+}
+
+export function validateAssignRoleDto(body: unknown): AssignRoleDto {
+  if (body == null || typeof body !== "object" || Array.isArray(body)) {
+    throw CustomError.badRequest("El body debe ser un objeto");
+  }
+  const b = body as Record<string, unknown>;
+
+  const membershipIdRaw = b.membershipId;
+  if (typeof membershipIdRaw !== "string" || membershipIdRaw.trim() === "") {
+    throw CustomError.badRequest(
+      "membershipId es requerido y debe ser un texto no vacío"
+    );
+  }
+
+  const roleIdRaw = b.roleId;
+  if (typeof roleIdRaw !== "string" || roleIdRaw.trim() === "") {
+    throw CustomError.badRequest(
+      "roleId es requerido y debe ser un texto no vacío"
+    );
+  }
+
+  return {
+    membershipId: membershipIdRaw.trim(),
+    roleId: roleIdRaw.trim(),
+  };
+}
+
