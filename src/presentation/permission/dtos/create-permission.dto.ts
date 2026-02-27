@@ -4,22 +4,11 @@ import {
   normalizeSpaces,
 } from "../../../domain/utils/string.utils";
 
-export const PERMISSION_TYPES = ["GLOBAL", "CUSTOM"] as const;
-export type PermissionType = (typeof PERMISSION_TYPES)[number];
-
 export interface CreatePermissionDto {
   name: string;
   value: string;
   description?: string;
   moduleId: string;
-  type: PermissionType;
-  businessId?: string;
-}
-
-export function isPermissionType(value: unknown): value is PermissionType {
-  return (
-    typeof value === "string" && PERMISSION_TYPES.includes(value as PermissionType)
-  );
 }
 
 export function validateCreatePermissionDto(body: unknown): CreatePermissionDto {
@@ -63,42 +52,10 @@ export function validateCreatePermissionDto(body: unknown): CreatePermissionDto 
   }
   const moduleId = moduleIdRaw.trim();
 
-  const typeRaw = b.type;
-  if (!isPermissionType(typeRaw)) {
-    throw CustomError.badRequest(
-      `type debe ser uno de: ${PERMISSION_TYPES.join(", ")}`
-    );
-  }
-  const type = typeRaw;
-
-  const businessIdRaw = (b as Record<string, unknown>).businessId;
-  let businessId: string | undefined;
-  if (type === "GLOBAL") {
-    if (
-      typeof businessIdRaw === "string" &&
-      businessIdRaw.trim() !== ""
-    ) {
-      throw CustomError.badRequest(
-        "businessId no debe enviarse cuando type es GLOBAL"
-      );
-    }
-  } else {
-    // CUSTOM
-    if (typeof businessIdRaw !== "string" || businessIdRaw.trim() === "") {
-      throw CustomError.badRequest(
-        "businessId es requerido y debe ser un texto no vacío cuando type es CUSTOM"
-      );
-    }
-    businessId = businessIdRaw.trim();
-  }
-
   return {
     name,
     value,
     ...(description !== undefined && { description }),
     moduleId,
-    type,
-    ...(businessId !== undefined && { businessId }),
   };
 }
-

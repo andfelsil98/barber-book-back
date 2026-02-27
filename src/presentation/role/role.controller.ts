@@ -30,6 +30,12 @@ export class RoleController {
 
     const pageSize = Math.min(MAX_PAGE_SIZE, pageSizeRaw);
 
+    const businessId =
+      typeof req.query.businessId === "string" &&
+      req.query.businessId.trim() !== ""
+        ? req.query.businessId.trim()
+        : undefined;
+
     const id =
       typeof req.query.id === "string" && req.query.id.trim() !== ""
         ? req.query.id.trim()
@@ -46,7 +52,11 @@ export class RoleController {
     }
 
     this.roleService
-      .getAllRoles({ page: pageRaw, pageSize })
+      .getAllRoles({
+        page: pageRaw,
+        pageSize,
+        ...(businessId != null && { businessId }),
+      })
       .then((result) => {
         res.status(200).json(result);
       })

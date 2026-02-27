@@ -26,6 +26,7 @@ export const errorHandler: ErrorRequestHandler = (
     });
     res.status(error.statusCode).json({
       error: error.message,
+      ...(error.code != null && { code: error.code }),
       timestamp,
     });
     return;

@@ -1,8 +1,7 @@
 import { CustomError } from "../../../domain/errors/custom-error";
 import {
-  formatName,
-  isOnlyLettersNumbersAndSpaces,
   normalizeSpaces,
+  removeAccents,
   slugFromName,
 } from "../../../domain/utils/string.utils";
 
@@ -34,12 +33,15 @@ export function validateCreateBusinessDto(body: unknown): CreateBusinessDto {
   if (nameNormalized === "") {
     throw CustomError.badRequest("name es requerido y debe ser un texto no vacío");
   }
-  if (!isOnlyLettersNumbersAndSpaces(nameNormalized)) {
+  const sanitizedName = normalizeSpaces(
+    removeAccents(nameNormalized).replace(/[^a-zA-Z0-9\s]/g, " ")
+  );
+  if (sanitizedName === "") {
     throw CustomError.badRequest(
-      "name solo permite letras, números y espacios (sin tildes ni caracteres especiales)"
+      "name debe tener al menos una letra o número luego de limpiar caracteres especiales"
     );
   }
-  const name = formatName(nameNormalized);
+  const name = sanitizedName.toUpperCase();
   const type = b.type;
   if (!isBusinessType(type)) {
     throw CustomError.badRequest(

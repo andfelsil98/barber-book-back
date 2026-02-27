@@ -221,6 +221,96 @@ export default class FirestoreService {
     }
   }
 
+  static async getAllFromSubcollection<T>(
+    parentCollection: string,
+    parentId: string,
+    subcollectionName: string
+  ): Promise<(T & { id: string })[]> {
+    try {
+      const db = this.getDB();
+      const snapshot = await db
+        .collection(parentCollection)
+        .doc(parentId)
+        .collection(subcollectionName)
+        .get();
+
+      return snapshot.docs.map((doc) => {
+        const data = doc.data() as T;
+        return { id: doc.id, ...data };
+      });
+    } catch (error) {
+      if (error instanceof CustomError) throw error;
+      logUnexpectedError(error, "getAllFromSubcollection");
+      throw CustomError.internalServerError("Error interno del servidor");
+    }
+  }
+
+  static async subcollectionDocumentExists(
+    parentCollection: string,
+    parentId: string,
+    subcollectionName: string,
+    docId: string
+  ): Promise<boolean> {
+    try {
+      const db = this.getDB();
+      const doc = await db
+        .collection(parentCollection)
+        .doc(parentId)
+        .collection(subcollectionName)
+        .doc(docId)
+        .get();
+      return doc.exists;
+    } catch (error) {
+      if (error instanceof CustomError) throw error;
+      logUnexpectedError(error, "subcollectionDocumentExists");
+      throw CustomError.internalServerError("Error interno del servidor");
+    }
+  }
+
+  static async deleteSubcollectionDocument(
+    parentCollection: string,
+    parentId: string,
+    subcollectionName: string,
+    docId: string
+  ): Promise<void> {
+    try {
+      const db = this.getDB();
+      await db
+        .collection(parentCollection)
+        .doc(parentId)
+        .collection(subcollectionName)
+        .doc(docId)
+        .delete();
+    } catch (error) {
+      if (error instanceof CustomError) throw error;
+      logUnexpectedError(error, "deleteSubcollectionDocument");
+      throw CustomError.internalServerError("Error interno del servidor");
+    }
+  }
+
+  static async deleteSubcollectionDocuments(
+    parentCollection: string,
+    parentId: string,
+    subcollectionName: string
+  ): Promise<number> {
+    try {
+      const db = this.getDB();
+      const snapshot = await db
+        .collection(parentCollection)
+        .doc(parentId)
+        .collection(subcollectionName)
+        .get();
+
+      const deletions = snapshot.docs.map((doc) => doc.ref.delete());
+      await Promise.all(deletions);
+      return snapshot.size;
+    } catch (error) {
+      if (error instanceof CustomError) throw error;
+      logUnexpectedError(error, "deleteSubcollectionDocuments");
+      throw CustomError.internalServerError("Error interno del servidor");
+    }
+  }
+
   static async update(
     collectionName: string,
     id: string,

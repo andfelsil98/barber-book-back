@@ -2,6 +2,7 @@ import { FirestoreDataBase } from "../../data/firestore/firestore.database";
 import { CustomError } from "../../domain/errors/custom-error";
 import type { BusinessMembership } from "../../domain/interfaces/business-membership.interface";
 import type { Role } from "../../domain/interfaces/role.interface";
+import type { User } from "../../domain/interfaces/user.interface";
 import {
   buildPagination,
   type PaginatedResult,
@@ -9,22 +10,41 @@ import {
   MAX_PAGE_SIZE,
 } from "../../domain/interfaces/pagination.interface";
 import FirestoreService from "./firestore.service";
+import { RoleService } from "./role.service";
 import { UserService } from "./user.service";
 
 const COLLECTION_NAME = "BusinessMemberships";
 const ROLE_COLLECTION = "Roles";
+const USER_COLLECTION = "Users";
+const ROOT_SUPER_ADMIN_ID = "WyeIL50oCUFg9PBvB9m9";
 
 export interface CreateBusinessMembershipData {
   businessId: string;
   userId: string;
 }
 
+export type BusinessMembershipWithRelations = Omit<
+  BusinessMembership,
+  "roleId" | "userId"
+> & {
+  role: Role | null;
+  user: User | null;
+};
+
 export class BusinessMembershipService {
-  constructor(private readonly userService?: UserService) {}
+  constructor(
+    private readonly userService?: UserService,
+    private readonly roleService?: RoleService
+  ) {}
 
   async getAllMemberships(
-    params: PaginationParams & { userId?: string; email?: string }
-  ): Promise<PaginatedResult<BusinessMembership>> {
+    params: PaginationParams & {
+      userId?: string;
+      email?: string;
+      businessId?: string;
+      expandRefs?: boolean;
+    }
+  ): Promise<PaginatedResult<BusinessMembership | BusinessMembershipWithRelations>> {
     try {
       const page = Math.max(1, params.page);
       const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, params.pageSize));
@@ -36,6 +56,11 @@ export class BusinessMembershipService {
         params.email != null && params.email.trim() !== ""
           ? params.email.trim()
           : undefined;
+      const requestedBusinessId =
+        params.businessId != null && params.businessId.trim() !== ""
+          ? params.businessId.trim()
+          : undefined;
+      const shouldExpandRefs = params.expandRefs === true;
 
       let effectiveUserId = requestedUserId;
 
@@ -60,8 +85,13 @@ export class BusinessMembershipService {
         effectiveUserId = user.id;
       }
 
-      const filters =
-        effectiveUserId != null
+      const filters = [
+        {
+          field: "status" as const,
+          operator: "in" as const,
+          value: ["ACTIVE", "INACTIVE", "PENDING"],
+        },
+        ...(effectiveUserId != null
           ? [
               {
                 field: "userId" as const,
@@ -69,17 +99,140 @@ export class BusinessMembershipService {
                 value: effectiveUserId,
               },
             ]
-          : [];
+          : []),
+        ...(requestedBusinessId != null
+          ? [
+              {
+                field: "businessId" as const,
+                operator: "==" as const,
+                value: requestedBusinessId,
+              },
+            ]
+          : []),
+      ];
 
-      return await FirestoreService.getAllPaginated<BusinessMembership>(
+      const result = await FirestoreService.getAllPaginated<BusinessMembership>(
         COLLECTION_NAME,
         { page, pageSize },
         filters
       );
+      const normalizedMemberships = result.data.map((membership) =>
+        this.normalizeMembership(membership)
+      );
+      if (!shouldExpandRefs) {
+        return {
+          ...result,
+          data: normalizedMemberships,
+        };
+      }
+
+      const data = await this.attachRelations(normalizedMemberships);
+      return {
+        ...result,
+        data,
+      };
     } catch (error) {
       if (error instanceof CustomError) throw error;
       throw CustomError.internalServerError("Error interno del servidor");
     }
+  }
+
+  private async attachRelations(
+    memberships: BusinessMembership[]
+  ): Promise<BusinessMembershipWithRelations[]> {
+    if (memberships.length === 0) {
+      return [];
+    }
+
+    const uniqueRoleIds = Array.from(
+      new Set(
+        memberships
+          .map((membership) => membership.roleId?.trim() ?? "")
+          .filter((roleId) => roleId !== "")
+      )
+    );
+    const uniqueUserIds = Array.from(
+      new Set(
+        memberships
+          .map((membership) => membership.userId.trim())
+          .filter((userId) => userId !== "")
+      )
+    );
+
+    const [rolesById, usersByMembershipUserId] = await Promise.all([
+      this.getRolesById(uniqueRoleIds),
+      this.getUsersByMembershipUserId(uniqueUserIds),
+    ]);
+
+    return memberships.map((membership) => {
+      const roleKey = membership.roleId?.trim() ?? "";
+      const userKey = membership.userId.trim();
+      const { roleId: _roleId, userId: _userId, ...membershipWithoutRelationIds } =
+        membership;
+
+      return {
+        ...membershipWithoutRelationIds,
+        role: roleKey !== "" ? (rolesById.get(roleKey) ?? null) : null,
+        user: userKey !== "" ? (usersByMembershipUserId.get(userKey) ?? null) : null,
+      };
+    });
+  }
+
+  private async getRolesById(roleIds: string[]): Promise<Map<string, Role>> {
+    if (roleIds.length === 0) {
+      return new Map();
+    }
+
+    const rolesByIdEntries = await Promise.all(
+      roleIds.map(async (roleId) => {
+        if (this.roleService) {
+          try {
+            const result = await this.roleService.getRoleWithPermissionsById(roleId);
+            return [roleId, result.role] as const;
+          } catch {
+            return [roleId, null] as const;
+          }
+        }
+
+        const roles = await FirestoreService.getAll<Role>(ROLE_COLLECTION, [
+          { field: "id", operator: "==", value: roleId },
+        ]);
+        return [roleId, roles[0] ?? null] as const;
+      })
+    );
+
+    return new Map(
+      rolesByIdEntries.filter((entry): entry is readonly [string, Role] => entry[1] != null)
+    );
+  }
+
+  private async getUsersByMembershipUserId(
+    userIds: string[]
+  ): Promise<Map<string, User>> {
+    if (userIds.length === 0) {
+      return new Map();
+    }
+
+    const usersByIdEntries = await Promise.all(
+      userIds.map(async (membershipUserId) => {
+        if (this.userService) {
+          const userById = await this.userService.getById(membershipUserId);
+          if (userById) {
+            return [membershipUserId, userById] as const;
+          }
+        }
+
+        // Compatibilidad con membresías antiguas que guardan documento en userId.
+        const usersByDocument = await FirestoreService.getAll<User>(USER_COLLECTION, [
+          { field: "document", operator: "==", value: membershipUserId },
+        ]);
+        return [membershipUserId, usersByDocument[0] ?? null] as const;
+      })
+    );
+
+    return new Map(
+      usersByIdEntries.filter((entry): entry is readonly [string, User] => entry[1] != null)
+    );
   }
 
   async create(data: CreateBusinessMembershipData): Promise<BusinessMembership> {
@@ -87,12 +240,13 @@ export class BusinessMembershipService {
       const doc = {
         businessId: data.businessId,
         userId: data.userId,
+        isEmployee: false,
         roleId: null as string | null,
         status: "PENDING" as const,
         createdAt: FirestoreDataBase.generateTimeStamp(),
       };
       const result = await FirestoreService.create(COLLECTION_NAME, doc);
-      return result as BusinessMembership;
+      return this.normalizeMembership(result as BusinessMembership);
     } catch (error) {
       if (error instanceof CustomError) throw error;
       throw CustomError.internalServerError("Error interno del servidor");
@@ -109,7 +263,7 @@ export class BusinessMembershipService {
     if (memberships.length === 0) {
       throw CustomError.notFound("No existe una membresía con este id");
     }
-    return memberships[0]!;
+    return this.normalizeMembership(memberships[0]!);
   }
 
   async toggleStatus(id: string): Promise<BusinessMembership> {
@@ -149,10 +303,29 @@ export class BusinessMembershipService {
         updatedAt: FirestoreDataBase.generateTimeStamp(),
       };
       await FirestoreService.update(COLLECTION_NAME, id, payload);
-      return await FirestoreService.getById<BusinessMembership>(
-        COLLECTION_NAME,
-        id
-      );
+      return await this.getMembershipById(id);
+    } catch (error) {
+      if (error instanceof CustomError) throw error;
+      throw CustomError.internalServerError("Error interno del servidor");
+    }
+  }
+
+  async toggleIsEmployee(id: string): Promise<BusinessMembership> {
+    try {
+      const membership = await this.getMembershipById(id);
+
+      if (membership.status === "DELETED") {
+        throw CustomError.badRequest(
+          "No se puede modificar una membresía eliminada"
+        );
+      }
+
+      await FirestoreService.update(COLLECTION_NAME, id, {
+        isEmployee: !membership.isEmployee,
+        updatedAt: FirestoreDataBase.generateTimeStamp(),
+      });
+
+      return await this.getMembershipById(id);
     } catch (error) {
       if (error instanceof CustomError) throw error;
       throw CustomError.internalServerError("Error interno del servidor");
@@ -161,11 +334,33 @@ export class BusinessMembershipService {
 
   async assignRole(
     membershipId: string,
-    roleId: string
+    roleId: string,
+    opts: {
+      businessId: string;
+      requesterDocument: string;
+    }
   ): Promise<BusinessMembership> {
     try {
-      // Validar membresía
-      await this.getMembershipById(membershipId);
+      const targetMembership = await this.getMembershipById(membershipId);
+      const businessId = opts.businessId.trim();
+      const requesterDocument = opts.requesterDocument.trim();
+
+      if (targetMembership.businessId !== businessId) {
+        throw CustomError.badRequest(
+          "El businessId del header no coincide con la membresía a modificar"
+        );
+      }
+
+      const requesterMembership =
+        await this.getMembershipByBusinessAndRequesterDocument(
+          businessId,
+          requesterDocument
+        );
+      if (!requesterMembership || requesterMembership.status === "DELETED") {
+        throw CustomError.forbidden(
+          "No tienes membresía vigente en el negocio indicado para asignar roles"
+        );
+      }
 
       // Validar rol
       const roles = await FirestoreService.getAll<Role>(ROLE_COLLECTION, [
@@ -175,18 +370,77 @@ export class BusinessMembershipService {
         throw CustomError.notFound("No existe un rol con este id");
       }
 
+      const isDemotingSuperAdmin =
+        targetMembership.roleId === ROOT_SUPER_ADMIN_ID &&
+        roleId !== ROOT_SUPER_ADMIN_ID;
+
+      if (isDemotingSuperAdmin) {
+        await this.ensureAnotherSuperAdminExists(businessId, targetMembership.id);
+      }
+
       const payload = {
         roleId,
         updatedAt: FirestoreDataBase.generateTimeStamp(),
       };
       await FirestoreService.update(COLLECTION_NAME, membershipId, payload);
-      return await FirestoreService.getById<BusinessMembership>(
-        COLLECTION_NAME,
-        membershipId
-      );
+      return await this.getMembershipById(membershipId);
     } catch (error) {
       if (error instanceof CustomError) throw error;
       throw CustomError.internalServerError("Error interno del servidor");
     }
+  }
+
+  private async getMembershipByBusinessAndRequesterDocument(
+    businessId: string,
+    requesterDocument: string
+  ): Promise<BusinessMembership | null> {
+    const memberships = await FirestoreService.getAll<BusinessMembership>(
+      COLLECTION_NAME,
+      [{ field: "businessId", operator: "==", value: businessId }]
+    );
+
+    let requesterUserId: string | undefined;
+    if (this.userService) {
+      const requesterUser = await this.userService.getByDocument(requesterDocument);
+      requesterUserId = requesterUser?.id;
+    }
+
+    return (
+      memberships.find(
+        (membership) =>
+          membership.userId === requesterDocument ||
+          (requesterUserId != null && membership.userId === requesterUserId)
+      ) ?? null
+    );
+  }
+
+  private async ensureAnotherSuperAdminExists(
+    businessId: string,
+    excludedMembershipId: string
+  ): Promise<void> {
+    const memberships = await FirestoreService.getAll<BusinessMembership>(
+      COLLECTION_NAME,
+      [{ field: "businessId", operator: "==", value: businessId }]
+    );
+
+    const anotherSuperAdminExists = memberships.some(
+      (membership) =>
+        membership.id !== excludedMembershipId &&
+        membership.status !== "DELETED" &&
+        membership.roleId === ROOT_SUPER_ADMIN_ID
+    );
+
+    if (!anotherSuperAdminExists) {
+      throw CustomError.conflict(
+        "No se puede realizar esta acción. Cada negocio debe tener al menos un SUPER_ADMIN."
+      );
+    }
+  }
+
+  private normalizeMembership(membership: BusinessMembership): BusinessMembership {
+    return {
+      ...membership,
+      isEmployee: membership.isEmployee === true,
+    };
   }
 }

@@ -8,6 +8,7 @@ import { PermissionRoutes } from "./permission/routes";
 import { RoleRoutes } from "./role/routes";
 import { BusinessMembershipRoutes } from "./business-membership/routes";
 import { UsersRoutes } from "./users/routes";
+import { AppointmentRoutes } from "./appointment/routes";
 
 export class AppRoutes {
   static get routes(): Router {
@@ -21,18 +22,7 @@ export class AppRoutes {
     router.use("/api/roles", RoleRoutes.routes);
     router.use("/api/business-memberships", BusinessMembershipRoutes.routes);
     router.use("/api/users", UsersRoutes.routes);
-    // // Products
-    // router.use('/api/products', ProductsRoutes.routes);
-    // // Categories
-    // router.use('/api/categories', CategoriesRoutes.routes);
-    // // Orders
-    // router.use('/api/orders', OrdersRoutes.routes);
-    // // Pets
-    // router.use('/api/pets', PetsRoutes.routes);
-    // // Carts
-    // router.use('/api/carts', CartsRoutes.routes);
-    // // Catalog
-    // router.use('/api/catalog', CatalogRoutes.routes);
+    router.use("/api/appointments", AppointmentRoutes.routes);
     return router;
   }
 }

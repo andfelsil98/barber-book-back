@@ -10,6 +10,8 @@ import FirestoreService from "./firestore.service";
 import { UserService } from "./user.service";
 
 const BUSINESS_COLLECTION = "Businesses";
+const USERS_COLLECTION = "Users";
+const BUSINESS_MEMBERSHIPS_COLLECTION = "BusinessMemberships";
 
 export interface RegisterResult {
   user: User;
@@ -43,34 +45,52 @@ export class AuthService {
       throw CustomError.conflict("Ya existe un usuario registrado con este documento");
     }
 
-    const user = await this.userService.createUser({
-      phone: dto.phone,
-      name: dto.name,
-      email: dto.email,
-      document: dto.document,
-      documentTypeName: dto.documentTypeName,
-      documentTypeId: dto.documentTypeId,
-    });
+    let firebaseUid: string | undefined;
+    let userId: string | undefined;
+    let membershipId: string | undefined;
 
-    const businessMembership = await this.businessMembershipService.create({
-      businessId: business.id,
-      userId: user.document,
-    });
+    try {
+      firebaseUid = await this.createFirebaseAuthUser(dto);
 
-    await FirestoreService.createInSubcollection(
-      "Users",
-      user.id,
-      "businessMemberships",
-      {
-        id: businessMembership.id,
+      const user = await this.userService.createUser({
+        phone: dto.phone,
+        name: dto.name,
+        email: dto.email,
+        document: dto.document,
+        documentTypeName: dto.documentTypeName,
+        documentTypeId: dto.documentTypeId,
+      });
+      userId = user.id;
+
+      const businessMembership = await this.businessMembershipService.create({
         businessId: business.id,
-      }
-    );
+        userId: user.document,
+      });
+      membershipId = businessMembership.id;
 
-    return {
-      user,
-      businessMembership,
-    };
+      await FirestoreService.createInSubcollection(
+        USERS_COLLECTION,
+        user.id,
+        "businessMemberships",
+        {
+          id: businessMembership.id,
+          businessId: business.id,
+        }
+      );
+
+      return {
+        user,
+        businessMembership,
+      };
+    } catch (error) {
+      await this.rollbackRegister({
+        firebaseUid,
+        userId,
+        membershipId,
+      });
+      if (error instanceof CustomError) throw error;
+      throw this.mapFirebaseRegisterError(error);
+    }
   }
 
   async login(dto: LoginDto): Promise<LoginResult> {
@@ -98,5 +118,70 @@ export class AuthService {
       { field: "status", operator: "==", value: "ACTIVE" },
     ]);
     return businesses[0] ?? null;
+  }
+
+  private async createFirebaseAuthUser(dto: RegisterDto): Promise<string> {
+    const auth = FirestoreDataBase.getAdmin().auth();
+    try {
+      const firebaseUser = await auth.createUser({
+        email: dto.email,
+        password: dto.password,
+        emailVerified: true,
+        displayName: dto.name,
+      });
+      await auth.setCustomUserClaims(firebaseUser.uid, {
+        document: dto.document,
+      });
+      return firebaseUser.uid;
+    } catch (error) {
+      throw this.mapFirebaseRegisterError(error);
+    }
+  }
+
+  private async rollbackRegister({
+    firebaseUid,
+    userId,
+    membershipId,
+  }: {
+    firebaseUid: string | undefined;
+    userId: string | undefined;
+    membershipId: string | undefined;
+  }): Promise<void> {
+    const deletions: Promise<unknown>[] = [];
+
+    if (membershipId) {
+      deletions.push(
+        FirestoreService.delete(BUSINESS_MEMBERSHIPS_COLLECTION, membershipId).catch(() => undefined)
+      );
+    }
+    if (userId) {
+      deletions.push(FirestoreService.delete(USERS_COLLECTION, userId).catch(() => undefined));
+    }
+    if (firebaseUid) {
+      deletions.push(FirestoreDataBase.getAdmin().auth().deleteUser(firebaseUid).catch(() => undefined));
+    }
+
+    await Promise.all(deletions);
+  }
+
+  private mapFirebaseRegisterError(error: unknown): CustomError {
+    const code =
+      typeof error === "object" &&
+      error != null &&
+      "code" in error &&
+      typeof (error as { code?: unknown }).code === "string"
+        ? (error as { code: string }).code
+        : "";
+
+    if (code === "auth/email-already-exists") {
+      return CustomError.conflict("Ya existe un usuario registrado con este correo");
+    }
+    if (code === "auth/invalid-password") {
+      return CustomError.badRequest("password inválido para Firebase Authentication");
+    }
+    if (code === "auth/invalid-email") {
+      return CustomError.badRequest("email inválido para Firebase Authentication");
+    }
+    return CustomError.internalServerError("Error interno del servidor");
   }
 }

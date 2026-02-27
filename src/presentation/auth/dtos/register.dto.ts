@@ -19,6 +19,7 @@ export interface RegisterDto {
   phone: string;
   name: string;
   email: string;
+  password: string;
   document: string;
   documentTypeName: string;
   documentTypeId: string;
@@ -54,6 +55,15 @@ export function validateRegisterDto(body: unknown): RegisterDto {
   }
   const email = normalizeSpaces(emailRaw);
 
+  const passwordRaw = b.password;
+  if (typeof passwordRaw !== "string" || passwordRaw.trim() === "") {
+    throw CustomError.badRequest("password es requerido y debe ser un texto no vacío");
+  }
+  if (passwordRaw.length < 6) {
+    throw CustomError.badRequest("password debe tener al menos 6 caracteres");
+  }
+  const password = passwordRaw;
+
   const documentRaw = b.document;
   if (typeof documentRaw !== "string" || documentRaw.trim() === "") {
     throw CustomError.badRequest("document es requerido y debe ser un texto no vacío");
@@ -87,6 +97,7 @@ export function validateRegisterDto(body: unknown): RegisterDto {
     phone,
     name,
     email,
+    password,
     document,
     documentTypeName,
     documentTypeId,

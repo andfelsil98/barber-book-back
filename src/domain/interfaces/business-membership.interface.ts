@@ -3,6 +3,7 @@ export interface BusinessMembership {
   businessId: string;
   /** Documento de identidad del usuario (no el id de Firestore). */
   userId: string;
+  isEmployee: boolean;
   roleId: string | null;
   status: "ACTIVE" | "INACTIVE" | "DELETED" | "PENDING";
   createdAt: string;

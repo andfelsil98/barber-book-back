@@ -1,15 +1,15 @@
 import { CustomError } from "../../../domain/errors/custom-error";
 import {
-  formatName,
-  isOnlyLettersNumbersAndSpaces,
   normalizeSpaces,
+  removeAccents,
   slugFromName,
 } from "../../../domain/utils/string.utils";
 import type { BusinessType } from "./create-business.dto";
 import { BUSINESS_TYPES, isBusinessType } from "./create-business.dto";
-
-const BUSINESS_STATUSES = ["ACTIVE", "INACTIVE", "PENDING"] as const;
-export type BusinessStatusUpdate = (typeof BUSINESS_STATUSES)[number];
+import type { CreateServiceItemDto } from "../../service/dtos/create-service.dto";
+import { validateCreateServiceItemDto } from "../../service/dtos/create-service.dto";
+import type { CreateBranchItemDto } from "../../branch/dtos/create-branch.dto";
+import { validateCreateBranchItemDto } from "../../branch/dtos/create-branch.dto";
 
 export interface UpdateBusinessDto {
   name?: string;
@@ -17,8 +17,8 @@ export interface UpdateBusinessDto {
   logoUrl?: string;
   /** Generado si se envía name. */
   slug?: string;
-  /** ACTIVE | INACTIVE | PENDING. Requerido para que los usuarios puedan registrarse en el negocio (solo ACTIVE). */
-  status?: BusinessStatusUpdate;
+  services?: CreateServiceItemDto[];
+  branches?: CreateBranchItemDto[];
 }
 
 export function validateUpdateBusinessDto(body: unknown): UpdateBusinessDto {
@@ -37,12 +37,15 @@ export function validateUpdateBusinessDto(body: unknown): UpdateBusinessDto {
     if (nameNormalized === "") {
       throw CustomError.badRequest("name no puede estar vacío");
     }
-    if (!isOnlyLettersNumbersAndSpaces(nameNormalized)) {
+    const sanitizedName = normalizeSpaces(
+      removeAccents(nameNormalized).replace(/[^a-zA-Z0-9\s]/g, " ")
+    );
+    if (sanitizedName === "") {
       throw CustomError.badRequest(
-        "name solo permite letras, números y espacios (sin tildes ni caracteres especiales)"
+        "name debe tener al menos una letra o número luego de limpiar caracteres especiales"
       );
     }
-    result.name = formatName(nameNormalized);
+    result.name = sanitizedName.toUpperCase();
     result.slug = slugFromName(result.name);
   }
 
@@ -64,23 +67,45 @@ export function validateUpdateBusinessDto(body: unknown): UpdateBusinessDto {
     result.logoUrl = normalizeSpaces(String(logoUrlRaw));
   }
 
-  const statusRaw = b.status;
-  if (statusRaw !== undefined) {
-    if (
-      statusRaw !== "ACTIVE" &&
-      statusRaw !== "INACTIVE" &&
-      statusRaw !== "PENDING"
-    ) {
-      throw CustomError.badRequest(
-        "status debe ser uno de: ACTIVE, INACTIVE, PENDING"
-      );
+  const servicesRaw = b.services;
+  if (servicesRaw !== undefined) {
+    if (!Array.isArray(servicesRaw)) {
+      throw CustomError.badRequest("services debe ser un arreglo cuando se proporcione");
     }
-    result.status = statusRaw;
+    if (servicesRaw.length === 0) {
+      throw CustomError.badRequest("services debe tener al menos un servicio cuando se proporcione");
+    }
+    result.services = servicesRaw.map((item, index) => {
+      try {
+        return validateCreateServiceItemDto(item);
+      } catch (error) {
+        const message = error instanceof CustomError ? error.message : String(error);
+        throw CustomError.badRequest(`Servicio en el índice ${index}: ${message}`);
+      }
+    });
+  }
+
+  const branchesRaw = b.branches;
+  if (branchesRaw !== undefined) {
+    if (!Array.isArray(branchesRaw)) {
+      throw CustomError.badRequest("branches debe ser un arreglo cuando se proporcione");
+    }
+    if (branchesRaw.length === 0) {
+      throw CustomError.badRequest("branches debe tener al menos una sede cuando se proporcione");
+    }
+    result.branches = branchesRaw.map((item, index) => {
+      try {
+        return validateCreateBranchItemDto(item);
+      } catch (error) {
+        const message = error instanceof CustomError ? error.message : String(error);
+        throw CustomError.badRequest(`Sede en el índice ${index}: ${message}`);
+      }
+    });
   }
 
   if (Object.keys(result).length === 0) {
     throw CustomError.badRequest(
-      "Se debe proporcionar al menos un campo (name, type, logoUrl, status)"
+      "Se debe proporcionar al menos un campo (name, type, logoUrl, services, branches)"
     );
   }
 

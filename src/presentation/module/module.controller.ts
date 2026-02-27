@@ -59,4 +59,3 @@ export class ModuleController {
       .catch(next);
   };
 }
-

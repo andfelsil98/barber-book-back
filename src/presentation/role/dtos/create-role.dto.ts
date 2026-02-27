@@ -1,5 +1,5 @@
 import { CustomError } from "../../../domain/errors/custom-error";
-import { formatName, normalizeSpaces } from "../../../domain/utils/string.utils";
+import { formatName } from "../../../domain/utils/string.utils";
 
 export const ROLE_TYPES = ["GLOBAL", "CUSTOM"] as const;
 export type RoleType = (typeof ROLE_TYPES)[number];

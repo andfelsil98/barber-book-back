@@ -1,15 +1,17 @@
 import { Router } from "express";
 import { UsersController } from "./users.controller";
-import { UsersService } from "../services/users.service";
+import { UserService } from "../services/user.service";
 
 export class UsersRoutes {
   static get routes(): Router {
     const router = Router();
-    const usersService = new UsersService();
-    const usersController = new UsersController(usersService);
+    const userService = new UserService();
+    const usersController = new UsersController(userService);
 
     router.get("/", usersController.getAllUsers);
+    router.delete("/:document", usersController.deleteUser);
 
     return router;
   }
 }
+

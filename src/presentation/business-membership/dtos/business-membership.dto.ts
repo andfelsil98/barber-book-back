@@ -5,6 +5,15 @@ export interface AssignRoleDto {
   roleId: string;
 }
 
+export function validateBusinessIdHeader(value: unknown): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw CustomError.badRequest(
+      "El header businessId es requerido y debe ser un texto no vacío"
+    );
+  }
+  return value.trim();
+}
+
 export function validateMembershipIdParam(id: unknown): string {
   if (id == null || typeof id !== "string" || id.trim() === "") {
     throw CustomError.badRequest(
@@ -39,4 +48,3 @@ export function validateAssignRoleDto(body: unknown): AssignRoleDto {
     roleId: roleIdRaw.trim(),
   };
 }
-

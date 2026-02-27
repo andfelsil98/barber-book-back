@@ -11,6 +11,10 @@ import FirestoreService from "./firestore.service";
 const COLLECTION_NAME = "Branches";
 const BUSINESS_COLLECTION = "Businesses";
 
+function toNameKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 export class BranchService {
   async getAllBranches(
     params: PaginationParams & { businessId?: string }
@@ -18,10 +22,16 @@ export class BranchService {
     try {
       const page = Math.max(1, params.page);
       const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, params.pageSize));
-      const filters =
-        params.businessId != null && params.businessId.trim() !== ""
+      const filters = [
+        {
+          field: "status" as const,
+          operator: "in" as const,
+          value: ["ACTIVE", "INACTIVE"],
+        },
+        ...(params.businessId != null && params.businessId.trim() !== ""
           ? [{ field: "businessId" as const, operator: "==" as const, value: params.businessId.trim() }]
-          : [];
+          : []),
+      ];
       return await FirestoreService.getAllPaginated<Branch>(COLLECTION_NAME, { page, pageSize }, filters);
     } catch (error) {
       if (error instanceof CustomError) throw error;
@@ -39,13 +49,18 @@ export class BranchService {
       const existingBranches = await FirestoreService.getAll<Branch>(COLLECTION_NAME, [
         { field: "businessId", operator: "==", value: dto.businessId },
       ]);
-      const existingNames = new Set(existingBranches.map((b) => b.name));
+      const existingNameKeys = new Set(existingBranches.map((b) => toNameKey(b.name)));
 
       const namesInRequest = new Set<string>();
       for (const item of dto.branches) {
-        if (existingNames.has(item.name)) throw CustomError.conflict("Ya existe una sede con este nombre en este negocio");
-        if (namesInRequest.has(item.name)) throw CustomError.conflict("Nombre de sede duplicado en la solicitud");
-        namesInRequest.add(item.name);
+        const nameKey = toNameKey(item.name);
+        if (existingNameKeys.has(nameKey)) {
+          throw CustomError.conflict("Ya existe una sede con este nombre en este negocio");
+        }
+        if (namesInRequest.has(nameKey)) {
+          throw CustomError.conflict("Nombre de sede duplicado en la solicitud");
+        }
+        namesInRequest.add(nameKey);
       }
 
       const created: Branch[] = [];
@@ -81,8 +96,9 @@ export class BranchService {
         const existingBranches = await FirestoreService.getAll<Branch>(COLLECTION_NAME, [
           { field: "businessId", operator: "==", value: branch.businessId },
         ]);
+        const nameKey = toNameKey(dto.name);
         const nameTaken = existingBranches.some(
-          (b) => b.id !== id && b.name === dto.name
+          (b) => b.id !== id && toNameKey(b.name) === nameKey
         );
         if (nameTaken) throw CustomError.conflict("Ya existe una sede con este nombre en este negocio");
       }

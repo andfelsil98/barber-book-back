@@ -45,9 +45,20 @@ export class BusinessController {
       return;
     }
 
+    const documentClaimRaw = req.decodedIdToken?.["document"];
+    if (typeof documentClaimRaw !== "string" || documentClaimRaw.trim() === "") {
+      next(
+        CustomError.unauthorized(
+          "Token de sesión inválido: claim document no presente en el token."
+        )
+      );
+      return;
+    }
+    const creatorDocument = documentClaimRaw.trim();
+
     const dto = validateCreateBusinessCompleteDto(req.body);
     this.businessService
-      .createBusinessComplete(dto)
+      .createBusinessComplete(dto, { creatorDocument })
       .then((result) => {
         res.status(201).json(result);
       })
@@ -77,6 +88,32 @@ export class BusinessController {
     }
     this.businessService
       .deleteBusiness(id)
+      .then((business) => {
+        res.status(200).json(business);
+      })
+      .catch(next);
+  };
+
+  public toggleStatus = (req: Request, res: Response, next: NextFunction) => {
+    const id = req.params.id;
+    if (!id) {
+      res.status(400).json({ message: "El id del negocio es requerido" });
+      return;
+    }
+
+    const documentClaimRaw = req.decodedIdToken?.["document"];
+    if (typeof documentClaimRaw !== "string" || documentClaimRaw.trim() === "") {
+      next(
+        CustomError.unauthorized(
+          "Token de sesión inválido: claim document no presente en el token."
+        )
+      );
+      return;
+    }
+    const actorDocument = documentClaimRaw.trim();
+
+    this.businessService
+      .toggleBusinessStatus(id, { actorDocument })
       .then((business) => {
         res.status(200).json(business);
       })

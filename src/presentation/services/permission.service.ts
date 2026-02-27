@@ -1,7 +1,6 @@
 import { FirestoreDataBase } from "../../data/firestore/firestore.database";
 import { CustomError } from "../../domain/errors/custom-error";
 import type { Permission } from "../../domain/interfaces/permission.interface";
-import type { Business } from "../../domain/interfaces/business.interface";
 import type { Module } from "../../domain/interfaces/module.interface";
 import type {
   PaginatedResult,
@@ -12,9 +11,12 @@ import FirestoreService from "./firestore.service";
 import type { CreatePermissionDto } from "../permission/dtos/create-permission.dto";
 
 const COLLECTION_NAME = "Permissions";
-const BUSINESS_COLLECTION = "Businesses";
 const MODULE_COLLECTION = "Modules";
 const ROLE_COLLECTION = "Roles";
+
+function toNameKey(value: string): string {
+  return value.trim().toLowerCase();
+}
 
 export class PermissionService {
   async getAllPermissions(
@@ -35,37 +37,28 @@ export class PermissionService {
 
   async createPermission(dto: CreatePermissionDto): Promise<Permission> {
     try {
-      // Validar que el módulo exista (mismo patrón que otros servicios)
+      const existingPermissions = await FirestoreService.getAll<Permission>(
+        COLLECTION_NAME
+      );
+      const nameKey = toNameKey(dto.name);
+      const duplicated = existingPermissions.some(
+        (permission) => toNameKey(permission.name) === nameKey
+      );
+      if (duplicated) {
+        throw CustomError.conflict("Ya existe un permiso con este nombre");
+      }
+
       const modules = await FirestoreService.getAll<Module>(
         MODULE_COLLECTION,
         [{ field: "id", operator: "==", value: dto.moduleId }]
       );
       if (modules.length === 0) throw CustomError.notFound("No existe un módulo con este id");
 
-      const module = modules[0]!;
-      // Solo se pueden crear permisos GLOBAL en módulos GLOBAL
-      if (dto.type === "GLOBAL" && module.type !== "GLOBAL") {
-        throw CustomError.badRequest(
-          "Solo se pueden crear permisos GLOBAL en módulos de tipo GLOBAL"
-        );
-      }
-      // Si el permiso es CUSTOM, validar que el negocio exista
-      if (dto.type === "CUSTOM") {
-        // Ya validamos en el DTO que businessId venga cuando type es CUSTOM.
-        const businesses = await FirestoreService.getAll<Business>(
-          BUSINESS_COLLECTION,
-          [{ field: "id", operator: "==", value: dto.businessId }]
-        );
-        if (businesses.length === 0) throw CustomError.notFound("No existe un negocio con este id");
-      }
-
       const data = {
         name: dto.name,
         value: dto.value,
         ...(dto.description !== undefined && { description: dto.description }),
         moduleId: dto.moduleId,
-        type: dto.type,
-        ...(dto.businessId !== undefined && { businessId: dto.businessId }),
         createdAt: FirestoreDataBase.generateTimeStamp(),
       };
 
@@ -86,16 +79,15 @@ export class PermissionService {
         throw CustomError.notFound("No existe un permiso con este id");
       }
 
-      const db = FirestoreService.getDB();
-      const rolesSnapshot = await db.collection(ROLE_COLLECTION).get();
-      for (const roleDoc of rolesSnapshot.docs) {
-        const permissionDoc = await db
-          .collection(ROLE_COLLECTION)
-          .doc(roleDoc.id)
-          .collection("Permissions")
-          .doc(id)
-          .get();
-        if (permissionDoc.exists) {
+      const roles = await FirestoreService.getAll<{ id: string }>(ROLE_COLLECTION);
+      for (const role of roles) {
+        const permissionExists = await FirestoreService.subcollectionDocumentExists(
+          ROLE_COLLECTION,
+          role.id,
+          "Permissions",
+          id
+        );
+        if (permissionExists) {
           throw CustomError.conflict(
             "No se puede eliminar el permiso porque está asociado a uno o más roles"
           );
@@ -109,4 +101,3 @@ export class PermissionService {
     }
   }
 }
-

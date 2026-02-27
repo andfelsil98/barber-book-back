@@ -1,7 +1,6 @@
 import { FirestoreDataBase } from "../../data/firestore/firestore.database";
 import { CustomError } from "../../domain/errors/custom-error";
 import type { Module } from "../../domain/interfaces/module.interface";
-import type { Business } from "../../domain/interfaces/business.interface";
 import type { Permission } from "../../domain/interfaces/permission.interface";
 import type {
   PaginatedResult,
@@ -12,8 +11,11 @@ import FirestoreService from "./firestore.service";
 import type { CreateModuleDto } from "../module/dtos/create-module.dto";
 
 const COLLECTION_NAME = "Modules";
-const BUSINESS_COLLECTION = "Businesses";
 const PERMISSIONS_COLLECTION = "Permissions";
+
+function toNameKey(value: string): string {
+  return value.trim().toLowerCase();
+}
 
 export class ModuleService {
   async getAllModules(params: PaginationParams): Promise<PaginatedResult<Module>> {
@@ -32,20 +34,19 @@ export class ModuleService {
 
   async createModule(dto: CreateModuleDto): Promise<Module> {
     try {
-      if (dto.type === "CUSTOM") {
-        const businesses = await FirestoreService.getAll<Business>(
-          BUSINESS_COLLECTION,
-          [{ field: "id", operator: "==", value: dto.businessId }]
-        );
-        if (businesses.length === 0) throw CustomError.notFound("No existe un negocio con este id");
+      const existingModules = await FirestoreService.getAll<Module>(COLLECTION_NAME);
+      const nameKey = toNameKey(dto.name);
+      const duplicated = existingModules.some(
+        (module) => toNameKey(module.name) === nameKey
+      );
+      if (duplicated) {
+        throw CustomError.conflict("Ya existe un módulo con este nombre");
       }
 
       const data = {
         name: dto.name,
         value: dto.value,
         ...(dto.description !== undefined && { description: dto.description }),
-        type: dto.type,
-        ...(dto.businessId !== undefined && { businessId: dto.businessId }),
         createdAt: FirestoreDataBase.generateTimeStamp(),
       };
 
@@ -83,4 +84,3 @@ export class ModuleService {
     }
   }
 }
-

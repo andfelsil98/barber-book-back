@@ -11,6 +11,15 @@ function isPublicPath(path: string): boolean {
   return PUBLIC_ROUTE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
+function getFirebaseAuthErrorCode(error: unknown): string {
+  return typeof error === "object" &&
+    error != null &&
+    "code" in error &&
+    typeof (error as { code?: unknown }).code === "string"
+    ? (error as { code: string }).code
+    : "";
+}
+
 export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   const path = req.originalUrl ?? req.path ?? "";
 
@@ -24,7 +33,12 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
     logger.warn(
       `[authMiddleware] Token de sesión ausente o mal formado. path=${path}, method=${req.method}`
     );
-    next(CustomError.unauthorized("Token de sesión requerido. Envía Authorization: Bearer <idToken>."));
+    next(
+      CustomError.unauthorized(
+        "Token de sesión requerido. Envía Authorization: Bearer <idToken>.",
+        "SESSION_TOKEN_REQUIRED"
+      )
+    );
     return;
   }
 
@@ -33,7 +47,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
     logger.warn(
       `[authMiddleware] Token de sesión vacío después de Bearer. path=${path}, method=${req.method}`
     );
-    next(CustomError.unauthorized("Token de sesión inválido."));
+    next(CustomError.unauthorized("Token de sesión inválido.", "INVALID_SESSION_TOKEN"));
     return;
   }
 
@@ -43,7 +57,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
 
   FirestoreDataBase.getAdmin()
     .auth()
-    .verifyIdToken(idToken)
+    .verifyIdToken(idToken, true)
     .then((decodedToken) => {
       logger.info(
         `[authMiddleware] Token de sesión verificado. uid=${decodedToken.uid}, email=${decodedToken.email ?? "no-email"}, path=${path}, method=${req.method}`
@@ -52,10 +66,33 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
       req.decodedIdToken = decodedToken;
       next();
     })
-    .catch(() => {
+    .catch((error: unknown) => {
+      const code = getFirebaseAuthErrorCode(error);
+      if (code === "auth/user-not-found") {
+        logger.warn(
+          `[authMiddleware] Usuario inexistente en Firebase Auth para el token enviado. path=${path}, method=${req.method}`
+        );
+        next(CustomError.unauthorized("Tu usuario fue eliminado.", "ACCOUNT_DELETED"));
+        return;
+      }
+      if (code === "auth/id-token-revoked") {
+        logger.warn(
+          `[authMiddleware] Token revocado detectado. path=${path}, method=${req.method}`
+        );
+        next(
+          CustomError.unauthorized(
+            "Tu sesión fue revocada. Inicia sesión nuevamente.",
+            "SESSION_REVOKED"
+          )
+        );
+        return;
+      }
+
       logger.warn(
-        `[authMiddleware] Falló la verificación del token de sesión. path=${path}, method=${req.method}`
+        `[authMiddleware] Falló la verificación del token de sesión. code=${code || "unknown"}, path=${path}, method=${req.method}`
       );
-      next(CustomError.unauthorized("Token de sesión inválido o expirado."));
+      next(
+        CustomError.unauthorized("Token de sesión inválido o expirado.", "INVALID_OR_EXPIRED_TOKEN")
+      );
     });
 }

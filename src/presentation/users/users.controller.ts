@@ -4,10 +4,11 @@ import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
 } from "../../domain/interfaces/pagination.interface";
-import type { UsersService } from "../services/users.service";
+import type { UserService } from "../services/user.service";
+import { CustomError } from "../../domain/errors/custom-error";
 
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(private readonly userService: UserService) {}
 
   public getAllUsers = (req: Request, res: Response, next: NextFunction) => {
     const pageRaw =
@@ -30,8 +31,43 @@ export class UsersController {
         ? req.query.userId.trim()
         : undefined;
 
-    this.usersService
+    this.userService
       .getAllUsers({ page: pageRaw, pageSize, ...(userId != null && { userId }) })
+      .then((result) => {
+        res.status(200).json(result);
+      })
+      .catch(next);
+  };
+
+  public deleteUser = (req: Request, res: Response, next: NextFunction) => {
+    const documentRaw = req.params.document;
+    if (typeof documentRaw !== "string" || documentRaw.trim() === "") {
+      res
+        .status(400)
+        .json({ message: "El parámetro document es requerido y debe ser un texto no vacío" });
+      return;
+    }
+    const document = documentRaw.trim();
+
+    const deletedByUid = req.uid;
+    const deletedByEmail = req.decodedIdToken?.email;
+
+    if (!deletedByUid && !deletedByEmail) {
+      next(
+        CustomError.unauthorized(
+          "No se pudo determinar el usuario responsable de la eliminación"
+        )
+      );
+      return;
+    }
+
+    const deleteOpts = {
+      ...(deletedByUid != null && { deletedByUid }),
+      ...(deletedByEmail != null && { deletedByEmail }),
+    };
+
+    this.userService
+      .deleteUser(document, deleteOpts)
       .then((result) => {
         res.status(200).json(result);
       })

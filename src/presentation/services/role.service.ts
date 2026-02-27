@@ -8,7 +8,10 @@ import type {
   PaginatedResult,
   PaginationParams,
 } from "../../domain/interfaces/pagination.interface";
-import { MAX_PAGE_SIZE } from "../../domain/interfaces/pagination.interface";
+import {
+  buildPagination,
+  MAX_PAGE_SIZE,
+} from "../../domain/interfaces/pagination.interface";
 import FirestoreService from "./firestore.service";
 import type { CreateRoleDto } from "../role/dtos/create-role.dto";
 import type {
@@ -21,18 +24,65 @@ const BUSINESS_COLLECTION = "Businesses";
 const PERMISSIONS_COLLECTION = "Permissions";
 const BUSINESS_MEMBERSHIPS_COLLECTION = "BusinessMemberships";
 
+function toNameKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 export class RoleService {
-  async getAllRoles(params: PaginationParams): Promise<PaginatedResult<Role>> {
+  async getAllRoles(
+    params: PaginationParams & { businessId?: string }
+  ): Promise<PaginatedResult<Role>> {
     try {
       const page = Math.max(1, params.page);
       const pageSize = Math.min(
         MAX_PAGE_SIZE,
         Math.max(1, params.pageSize)
       );
-      return await FirestoreService.getAllPaginated<Role>(COLLECTION_NAME, {
-        page,
-        pageSize,
-      });
+      const businessId =
+        params.businessId != null && params.businessId.trim() !== ""
+          ? params.businessId.trim()
+          : undefined;
+
+      if (!businessId) {
+        return await FirestoreService.getAllPaginated<Role>(COLLECTION_NAME, {
+          page,
+          pageSize,
+        });
+      }
+
+      const [
+        globalRoles,
+        customRolesPage,
+        customRolesTotal,
+      ] = await Promise.all([
+        FirestoreService.getAll<Role>(COLLECTION_NAME, [
+          { field: "type", operator: "==", value: "GLOBAL" },
+        ]),
+        FirestoreService.getAllPaginated<Role>(
+          COLLECTION_NAME,
+          { page, pageSize },
+          [
+            { field: "type", operator: "==", value: "CUSTOM" },
+            { field: "businessId", operator: "==", value: businessId },
+          ]
+        ),
+        (async () => {
+          const allCustom = await FirestoreService.getAll<Role>(COLLECTION_NAME, [
+            { field: "type", operator: "==", value: "CUSTOM" },
+            { field: "businessId", operator: "==", value: businessId },
+          ]);
+          return allCustom.length;
+        })(),
+      ]);
+
+      const combinedData = [...globalRoles, ...customRolesPage.data];
+      const total = globalRoles.length + customRolesTotal;
+
+      return {
+        data: combinedData,
+        total,
+        pagination: buildPagination(page, pageSize, total),
+      };
     } catch (error) {
       if (error instanceof CustomError) throw error;
       throw CustomError.internalServerError("Error interno del servidor");
@@ -54,24 +104,18 @@ export class RoleService {
       }
       const role = roles[0]!;
 
-      const db = FirestoreService.getDB();
-      const snapshot = await db
-        .collection(COLLECTION_NAME)
-        .doc(id)
-        .collection("Permissions")
-        .get();
+      const permissionsSnapshot = await FirestoreService.getAllFromSubcollection<{
+        name?: string;
+        value?: string;
+        moduleId?: string;
+      }>(COLLECTION_NAME, id, "Permissions");
 
-      const permissions = snapshot.docs.map((doc) => {
-        const data = doc.data() as {
-          name?: string;
-          value?: string;
-          moduleId?: string;
-        };
+      const permissions = permissionsSnapshot.map((permissionDoc) => {
         return {
-          id: doc.id,
-          name: data.name ?? "",
-          value: data.value ?? "",
-          moduleId: data.moduleId ?? "",
+          id: permissionDoc.id,
+          name: permissionDoc.name ?? "",
+          value: permissionDoc.value ?? "",
+          moduleId: permissionDoc.moduleId ?? "",
         };
       });
 
@@ -84,6 +128,13 @@ export class RoleService {
 
   async createRole(dto: CreateRoleDto): Promise<Role> {
     try {
+      const existingRoles = await FirestoreService.getAll<Role>(COLLECTION_NAME);
+      const nameKey = toNameKey(dto.name);
+      const duplicated = existingRoles.some((role) => toNameKey(role.name) === nameKey);
+      if (duplicated) {
+        throw CustomError.conflict("Ya existe un rol con este nombre");
+      }
+
       // Si el rol es CUSTOM, validar que el negocio exista
       if (dto.type === "CUSTOM") {
         const businesses = await FirestoreService.getAll<Business>(
@@ -95,7 +146,7 @@ export class RoleService {
         }
       }
 
-      // Validar que todos los permisos existan y coincidan con el tipo del rol
+      // Validar que todos los permisos existan
       const resolvedPermissions: Permission[] = [];
       for (const [index, permissionId] of dto.permissions.entries()) {
         const permissions = await FirestoreService.getAll<Permission>(
@@ -107,13 +158,7 @@ export class RoleService {
             `No existe un permiso con el id indicado en la posición ${index}`
           );
         }
-        const permission = permissions[0]!;
-        this.validatePermissionCompatibility(
-          permission,
-          dto.type,
-          dto.businessId
-        );
-        resolvedPermissions.push(permission);
+        resolvedPermissions.push(permissions[0]!);
       }
 
       const data = {
@@ -161,29 +206,31 @@ export class RoleService {
       }
 
       const role = roles[0]!;
-      const db = FirestoreService.getDB();
-      const rolePermissionsRef = db
-        .collection(COLLECTION_NAME)
-        .doc(id)
-        .collection("Permissions");
-
-      const currentPermissionsSnapshot = await rolePermissionsRef.get();
+      const currentPermissionsSnapshot = await FirestoreService.getAllFromSubcollection<{
+        id: string;
+      }>(COLLECTION_NAME, id, "Permissions");
       const currentPermissionIds = new Set(
-        currentPermissionsSnapshot.docs.map((doc) => doc.id)
+        currentPermissionsSnapshot.map((permissionDoc) => permissionDoc.id)
       );
 
       const payload: Record<string, unknown> = {
         updatedAt: FirestoreDataBase.generateTimeStamp(),
       };
       if (dto.name !== undefined) {
+        const nameKey = toNameKey(dto.name);
+        const existingRoles = await FirestoreService.getAll<Role>(COLLECTION_NAME);
+        const duplicated = existingRoles.some(
+          (existingRole) => existingRole.id !== id && toNameKey(existingRole.name) === nameKey
+        );
+        if (duplicated) {
+          throw CustomError.conflict("Ya existe un rol con este nombre");
+        }
         payload.name = dto.name;
       }
 
       if (dto.permissions !== undefined) {
         const resolvedOperations = await this.resolvePermissionOperations(
-          dto.permissions,
-          role.type,
-          role.businessId
+          dto.permissions
         );
 
         for (const operation of resolvedOperations) {
@@ -213,7 +260,12 @@ export class RoleService {
               `No se puede remover el permiso ${operation.permission.id} porque no está asociado al rol`
             );
           }
-          await rolePermissionsRef.doc(operation.permission.id).delete();
+          await FirestoreService.deleteSubcollectionDocument(
+            COLLECTION_NAME,
+            id,
+            "Permissions",
+            operation.permission.id
+          );
           currentPermissionIds.delete(operation.permission.id);
         }
 
@@ -250,15 +302,11 @@ export class RoleService {
         );
       }
 
-      const db = FirestoreService.getDB();
-      const permissionsSnapshot = await db
-        .collection(COLLECTION_NAME)
-        .doc(id)
-        .collection("Permissions")
-        .get();
-      for (const doc of permissionsSnapshot.docs) {
-        await doc.ref.delete();
-      }
+      await FirestoreService.deleteSubcollectionDocuments(
+        COLLECTION_NAME,
+        id,
+        "Permissions"
+      );
 
       return await FirestoreService.delete(COLLECTION_NAME, id);
     } catch (error) {
@@ -268,9 +316,7 @@ export class RoleService {
   }
 
   private async resolvePermissionOperations(
-    operations: PermissionUpdateOperationDto[],
-    roleType: Role["type"],
-    roleBusinessId?: string
+    operations: PermissionUpdateOperationDto[]
   ): Promise<Array<{ op: "add" | "remove"; permission: Permission }>> {
     const resolved: Array<{ op: "add" | "remove"; permission: Permission }> = [];
 
@@ -286,11 +332,6 @@ export class RoleService {
       }
 
       const permission = permissions[0]!;
-      this.validatePermissionCompatibility(
-        permission,
-        roleType,
-        roleBusinessId
-      );
 
       resolved.push({
         op: operation.op,
@@ -300,38 +341,4 @@ export class RoleService {
 
     return resolved;
   }
-
-  private validatePermissionCompatibility(
-    permission: Permission,
-    roleType: Role["type"],
-    roleBusinessId?: string
-  ): void {
-    if (roleType === "GLOBAL") {
-      if (permission.type !== "GLOBAL") {
-        throw CustomError.badRequest(
-          "Un rol GLOBAL solo puede asociar permisos GLOBAL"
-        );
-      }
-      return;
-    }
-
-    if (permission.type !== "CUSTOM") {
-      throw CustomError.badRequest(
-        "Un rol CUSTOM solo puede asociar permisos CUSTOM"
-      );
-    }
-
-    if (!roleBusinessId || roleBusinessId.trim() === "") {
-      throw CustomError.badRequest(
-        "El rol CUSTOM no tiene businessId válido para asociar permisos"
-      );
-    }
-
-    if (permission.businessId !== roleBusinessId) {
-      throw CustomError.badRequest(
-        "Un rol CUSTOM solo puede asociar permisos CUSTOM del mismo negocio"
-      );
-    }
-  }
 }
-

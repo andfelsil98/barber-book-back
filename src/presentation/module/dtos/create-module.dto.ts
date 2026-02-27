@@ -4,19 +4,10 @@ import {
   normalizeSpaces,
 } from "../../../domain/utils/string.utils";
 
-export const MODULE_TYPES = ["GLOBAL", "CUSTOM"] as const;
-export type ModuleType = (typeof MODULE_TYPES)[number];
-
 export interface CreateModuleDto {
   name: string;
   value: string;
   description?: string;
-  type: ModuleType;
-  businessId?: string;
-}
-
-export function isModuleType(value: unknown): value is ModuleType {
-  return typeof value === "string" && MODULE_TYPES.includes(value as ModuleType);
 }
 
 export function validateCreateModuleDto(body: unknown): CreateModuleDto {
@@ -52,41 +43,9 @@ export function validateCreateModuleDto(body: unknown): CreateModuleDto {
     }
   }
 
-  const typeRaw = b.type;
-  if (!isModuleType(typeRaw)) {
-    throw CustomError.badRequest(
-      `type debe ser uno de: ${MODULE_TYPES.join(", ")}`
-    );
-  }
-  const type = typeRaw;
-
-  const businessIdRaw = (b as Record<string, unknown>).businessId;
-  let businessId: string | undefined;
-  if (type === "GLOBAL") {
-    if (
-      typeof businessIdRaw === "string" &&
-      businessIdRaw.trim() !== ""
-    ) {
-      throw CustomError.badRequest(
-        "businessId no debe enviarse cuando type es GLOBAL"
-      );
-    }
-  } else {
-    // CUSTOM
-    if (typeof businessIdRaw !== "string" || businessIdRaw.trim() === "") {
-      throw CustomError.badRequest(
-        "businessId es requerido y debe ser un texto no vacío cuando type es CUSTOM"
-      );
-    }
-    businessId = businessIdRaw.trim();
-  }
-
   return {
     name,
     value,
-    type,
     ...(description !== undefined && { description }),
-    ...(businessId !== undefined && { businessId }),
   };
 }
-
