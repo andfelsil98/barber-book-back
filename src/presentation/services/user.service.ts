@@ -66,20 +66,51 @@ export class UserService {
   }
 
   async getAllUsers(
-    params: PaginationParams & { userId?: string }
+    params: PaginationParams & { userId?: string; document?: string; name?: string }
   ): Promise<PaginatedResult<User>> {
     try {
       const page = Math.max(1, params.page);
       const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, params.pageSize));
-      const filters =
-        params.userId != null && params.userId.trim() !== ""
+      const requestedName =
+        params.name != null && params.name.trim() !== ""
+          ? params.name.trim()
+          : undefined;
+      const filters = [
+        ...(params.userId != null && params.userId.trim() !== ""
           ? [{ field: "id" as const, operator: "==" as const, value: params.userId.trim() }]
-          : [];
+          : []),
+        ...(params.document != null && params.document.trim() !== ""
+          ? [
+              {
+                field: "document" as const,
+                operator: "==" as const,
+                value: params.document.trim(),
+              },
+            ]
+          : []),
+        ...(requestedName != null
+          ? [
+              {
+                field: "name" as const,
+                operator: ">=" as const,
+                value: requestedName,
+              },
+              {
+                field: "name" as const,
+                operator: "<=" as const,
+                value: `${requestedName}\uf8ff`,
+              },
+            ]
+          : []),
+      ];
 
       return await FirestoreService.getAllPaginated<User>(
         COLLECTION_NAME,
         { page, pageSize },
-        filters
+        filters,
+        requestedName != null
+          ? { field: "name", direction: "asc" }
+          : undefined
       );
     } catch (error) {
       if (error instanceof CustomError) throw error;

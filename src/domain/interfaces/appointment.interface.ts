@@ -2,24 +2,19 @@ export type AppointmentStatus =
   | "CREATED"
   | "CANCELLED"
   | "FINISHED"
-  | "PENDING";
-
-export interface AppointmentServiceSelection {
-  id: string;
-  startTime: string;
-  endTime: string;
-}
+  | "DELETED";
 
 export interface Appointment {
   id: string;
-  businessId: string;
-  branchId: string;
   date: string;
-  services: AppointmentServiceSelection[];
-  employeeId?: string;
-  clientId: string;
+  startTime: string;
+  endTime: string;
+  serviceId: string;
+  employeeId: string;
   status: AppointmentStatus;
+  bookingId: string;
   createdAt: string;
   cancelledAt?: string;
+  deletedAt?: string;
   updatedAt?: string;
 }

@@ -3,6 +3,7 @@ export interface User {
   phone: string;
   name: string;
   email: string;
+  isAuthActive?: boolean;
   businessMemberships?: string[];
   document: string;
   documentTypeName: string;

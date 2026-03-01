@@ -344,10 +344,11 @@ export class BusinessMembershipService {
 
       const db = FirestoreDataBase.getDB();
       const batch = db.batch();
-      batch.update(db.collection(COLLECTION_NAME).doc(id), {
+      const membershipPayload: Record<string, unknown> = {
         isEmployee: nextIsEmployee,
         updatedAt,
-      });
+      };
+      batch.update(db.collection(COLLECTION_NAME).doc(id), membershipPayload);
       batch.update(db.collection(BUSINESSES_COLLECTION).doc(membership.businessId), {
         employees: nextEmployees,
         updatedAt,

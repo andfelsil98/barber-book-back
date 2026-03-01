@@ -30,9 +30,23 @@ export class UsersController {
       typeof req.query.userId === "string" && req.query.userId.trim() !== ""
         ? req.query.userId.trim()
         : undefined;
+    const document =
+      typeof req.query.document === "string" && req.query.document.trim() !== ""
+        ? req.query.document.trim()
+        : undefined;
+    const name =
+      typeof req.query.name === "string" && req.query.name.trim() !== ""
+        ? req.query.name.trim()
+        : undefined;
 
     this.userService
-      .getAllUsers({ page: pageRaw, pageSize, ...(userId != null && { userId }) })
+      .getAllUsers({
+        page: pageRaw,
+        pageSize,
+        ...(userId != null && { userId }),
+        ...(document != null && { document }),
+        ...(name != null && { name }),
+      })
       .then((result) => {
         res.status(200).json(result);
       })

@@ -10,6 +10,8 @@ export class AppointmentRoutes {
 
     router.get("/", appointmentController.getAll);
     router.post("/", appointmentController.create);
+    router.put("/:id", appointmentController.update);
+    router.delete("/:id", appointmentController.delete);
 
     return router;
   }

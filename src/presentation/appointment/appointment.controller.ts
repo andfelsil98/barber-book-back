@@ -6,6 +6,10 @@ import {
 } from "../../domain/interfaces/pagination.interface";
 import type { AppointmentService } from "../services/appointment.service";
 import { validateCreateAppointmentDto } from "./dtos/create-appointment.dto";
+import {
+  validateAppointmentIdParam,
+  validateUpdateAppointmentDto,
+} from "./dtos/update-appointment.dto";
 
 function parseDateQuery(value: unknown, field: "startDate" | "endDate"): string | undefined {
   if (value == null) return undefined;
@@ -33,6 +37,17 @@ function parseSameDateQuery(value: unknown): boolean | undefined {
   if (normalized === "true") return true;
   if (normalized === "false") return false;
   throw new Error("sameDate debe ser true o false");
+}
+
+function parseIncludeDeletesQuery(value: unknown): boolean | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") {
+    throw new Error("includeDeletes debe ser booleano (true o false)");
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  throw new Error("includeDeletes debe ser true o false");
 }
 
 export class AppointmentController {
@@ -68,6 +83,12 @@ export class AppointmentController {
         req.query.employeeId.trim() !== ""
           ? req.query.employeeId.trim()
           : undefined;
+      const bookingId =
+        typeof req.query.bookingId === "string" &&
+        req.query.bookingId.trim() !== ""
+          ? req.query.bookingId.trim()
+          : undefined;
+      const includeDeletes = parseIncludeDeletesQuery(req.query.includeDeletes);
       const startDate = parseDateQuery(req.query.startDate, "startDate");
       const endDate = parseDateQuery(req.query.endDate, "endDate");
       const sameDate = parseSameDateQuery(req.query.sameDate);
@@ -103,6 +124,8 @@ export class AppointmentController {
           ...(businessId != null && { businessId }),
           ...(id != null && { id }),
           ...(employeeId != null && { employeeId }),
+          ...(bookingId != null && { bookingId }),
+          ...(includeDeletes != null && { includeDeletes }),
           ...(startDate != null && { startDate }),
           ...(endDate != null && { endDate }),
           ...(sameDate != null && { sameDate }),
@@ -123,6 +146,27 @@ export class AppointmentController {
       .createAppointment(dto)
       .then((appointment) => {
         res.status(201).json(appointment);
+      })
+      .catch(next);
+  };
+
+  public update = (req: Request, res: Response, next: NextFunction) => {
+    const id = validateAppointmentIdParam(req.params.id);
+    const dto = validateUpdateAppointmentDto(req.body);
+    this.appointmentService
+      .updateAppointment(id, dto)
+      .then((appointment) => {
+        res.status(200).json(appointment);
+      })
+      .catch(next);
+  };
+
+  public delete = (req: Request, res: Response, next: NextFunction) => {
+    const id = validateAppointmentIdParam(req.params.id);
+    this.appointmentService
+      .deleteAppointment(id)
+      .then((appointment) => {
+        res.status(200).json(appointment);
       })
       .catch(next);
   };

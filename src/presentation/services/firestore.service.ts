@@ -14,6 +14,7 @@ import { logger } from "../../infrastructure/logger/logger";
 interface DocTimestamps {
   createdAt?: Timestamp | null;
   updatedAt?: Timestamp | null;
+  cancelledAt?: Timestamp | null;
   deletedAt?: Timestamp | null;
 }
 
@@ -45,11 +46,13 @@ export default class FirestoreService {
   private static formatTimestamps(data: DocTimestamps): {
     createdAt: string | null;
     updatedAt: string | null;
+    cancelledAt: string | null;
     deletedAt: string | null;
   } {
     return {
       createdAt: this.toISO(data.createdAt),
       updatedAt: this.toISO(data.updatedAt),
+      cancelledAt: this.toISO(data.cancelledAt),
       deletedAt: this.toISO(data.deletedAt),
     };
   }
@@ -70,12 +73,13 @@ export default class FirestoreService {
       const snapshot = await query.get();
       return snapshot.docs.map((doc) => {
         const data = doc.data() as T & DocTimestamps;
-        const { createdAt, updatedAt, deletedAt } = this.formatTimestamps(data);
+        const { createdAt, updatedAt, cancelledAt, deletedAt } = this.formatTimestamps(data);
         const objResponse = {
           id: doc.id,
           ...data,
           ...(createdAt != null && { createdAt }),
           ...(updatedAt != null && { updatedAt }),
+          ...(cancelledAt != null && { cancelledAt }),
           ...(deletedAt != null && { deletedAt }),
         };
         return objResponse as T & { id: string };
@@ -115,12 +119,13 @@ export default class FirestoreService {
 
       const data = snapshot.docs.map((doc) => {
         const docData = doc.data() as T & DocTimestamps;
-        const { createdAt, updatedAt, deletedAt } = this.formatTimestamps(docData);
+        const { createdAt, updatedAt, cancelledAt, deletedAt } = this.formatTimestamps(docData);
         const objResponse = {
           id: doc.id,
           ...docData,
           ...(createdAt != null && { createdAt }),
           ...(updatedAt != null && { updatedAt }),
+          ...(cancelledAt != null && { cancelledAt }),
           ...(deletedAt != null && { deletedAt }),
         };
         return objResponse as T & { id: string };
@@ -151,12 +156,13 @@ export default class FirestoreService {
         );
       }
       const data = doc.data() as T & DocTimestamps;
-      const { createdAt, updatedAt, deletedAt } = this.formatTimestamps(data);
+      const { createdAt, updatedAt, cancelledAt, deletedAt } = this.formatTimestamps(data);
       return {
         id: doc.id,
         ...data,
         ...(createdAt != null && { createdAt }),
         ...(updatedAt != null && { updatedAt }),
+        ...(cancelledAt != null && { cancelledAt }),
         ...(deletedAt != null && { deletedAt }),
       } as T & { id: string };
     } catch (error) {

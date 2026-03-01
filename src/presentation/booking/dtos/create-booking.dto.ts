@@ -1,14 +1,18 @@
 import { CustomError } from "../../../domain/errors/custom-error";
 import { normalizeSpaces } from "../../../domain/utils/string.utils";
 
-export interface CreateAppointmentDto {
-  businessId: string;
-  branchId: string;
+export interface CreateBookingAppointmentDto {
   date: string;
   startTime: string;
   endTime: string;
   serviceId: string;
   employeeId: string;
+}
+
+export interface CreateBookingDto {
+  businessId: string;
+  branchId: string;
+  appointments: CreateBookingAppointmentDto[];
   clientId: string;
   clientDocumentTypeId?: string;
   clientDocumentTypeName?: string;
@@ -17,10 +21,7 @@ export interface CreateAppointmentDto {
   clientEmail?: string;
 }
 
-function parseIsoDateOrThrow(
-  rawValue: string,
-  fieldPath: string
-): string {
+function parseIsoDateOrThrow(rawValue: string, fieldPath: string): string {
   const value = normalizeSpaces(rawValue);
   const isoDateRegex = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -59,7 +60,63 @@ function parseTimeOrThrow(
   return { value, millis };
 }
 
-export function validateCreateAppointmentDto(body: unknown): CreateAppointmentDto {
+function validateBookingAppointment(
+  item: unknown,
+  index: number
+): CreateBookingAppointmentDto {
+  if (item == null || typeof item !== "object" || Array.isArray(item)) {
+    throw CustomError.badRequest(
+      `appointments[${index}] debe ser un objeto con date, startTime, endTime, serviceId y employeeId`
+    );
+  }
+
+  const appointmentItem = item as Record<string, unknown>;
+  const pathPrefix = `appointments[${index}]`;
+
+  const dateRaw = appointmentItem.date;
+  if (typeof dateRaw !== "string" || dateRaw.trim() === "") {
+    throw CustomError.badRequest(`${pathPrefix}.date es requerido`);
+  }
+  const date = parseIsoDateOrThrow(dateRaw, `${pathPrefix}.date`);
+
+  const startTimeRaw = appointmentItem.startTime;
+  if (typeof startTimeRaw !== "string" || startTimeRaw.trim() === "") {
+    throw CustomError.badRequest(`${pathPrefix}.startTime es requerido`);
+  }
+  const startTime = parseTimeOrThrow(startTimeRaw, `${pathPrefix}.startTime`);
+
+  const endTimeRaw = appointmentItem.endTime;
+  if (typeof endTimeRaw !== "string" || endTimeRaw.trim() === "") {
+    throw CustomError.badRequest(`${pathPrefix}.endTime es requerido`);
+  }
+  const endTime = parseTimeOrThrow(endTimeRaw, `${pathPrefix}.endTime`);
+
+  if (endTime.millis <= startTime.millis) {
+    throw CustomError.badRequest(
+      `${pathPrefix}.endTime debe ser mayor que startTime`
+    );
+  }
+
+  const serviceIdRaw = appointmentItem.serviceId;
+  if (typeof serviceIdRaw !== "string" || serviceIdRaw.trim() === "") {
+    throw CustomError.badRequest(`${pathPrefix}.serviceId es requerido`);
+  }
+
+  const employeeIdRaw = appointmentItem.employeeId;
+  if (typeof employeeIdRaw !== "string" || employeeIdRaw.trim() === "") {
+    throw CustomError.badRequest(`${pathPrefix}.employeeId es requerido`);
+  }
+
+  return {
+    date,
+    startTime: startTime.value,
+    endTime: endTime.value,
+    serviceId: normalizeSpaces(serviceIdRaw),
+    employeeId: normalizeSpaces(employeeIdRaw),
+  };
+}
+
+export function validateCreateBookingDto(body: unknown): CreateBookingDto {
   if (body == null || typeof body !== "object" || Array.isArray(body)) {
     throw CustomError.badRequest("El body debe ser un objeto");
   }
@@ -80,47 +137,15 @@ export function validateCreateAppointmentDto(body: unknown): CreateAppointmentDt
     );
   }
 
-  const dateRaw = parsedBody.date;
-  if (typeof dateRaw !== "string" || dateRaw.trim() === "") {
+  const appointmentsRaw = parsedBody.appointments;
+  if (!Array.isArray(appointmentsRaw) || appointmentsRaw.length === 0) {
     throw CustomError.badRequest(
-      "date es requerido y debe ser un texto no vacío"
+      "appointments es requerido y debe contener al menos un item"
     );
   }
-  const date = parseIsoDateOrThrow(dateRaw, "date");
-
-  const startTimeRaw = parsedBody.startTime;
-  if (typeof startTimeRaw !== "string" || startTimeRaw.trim() === "") {
-    throw CustomError.badRequest(
-      "startTime es requerido y debe ser un texto no vacío"
-    );
-  }
-  const startTime = parseTimeOrThrow(startTimeRaw, "startTime");
-
-  const endTimeRaw = parsedBody.endTime;
-  if (typeof endTimeRaw !== "string" || endTimeRaw.trim() === "") {
-    throw CustomError.badRequest(
-      "endTime es requerido y debe ser un texto no vacío"
-    );
-  }
-  const endTime = parseTimeOrThrow(endTimeRaw, "endTime");
-
-  if (endTime.millis <= startTime.millis) {
-    throw CustomError.badRequest("endTime debe ser mayor que startTime");
-  }
-
-  const serviceIdRaw = parsedBody.serviceId;
-  if (typeof serviceIdRaw !== "string" || serviceIdRaw.trim() === "") {
-    throw CustomError.badRequest(
-      "serviceId es requerido y debe ser un texto no vacío"
-    );
-  }
-
-  const employeeIdRaw = parsedBody.employeeId;
-  if (typeof employeeIdRaw !== "string" || employeeIdRaw.trim() === "") {
-    throw CustomError.badRequest(
-      "employeeId es requerido y debe ser un texto no vacío"
-    );
-  }
+  const appointments = appointmentsRaw.map((appointmentItem, index) =>
+    validateBookingAppointment(appointmentItem, index)
+  );
 
   const clientIdRaw = parsedBody.clientId;
   if (typeof clientIdRaw !== "string" || clientIdRaw.trim() === "") {
@@ -182,11 +207,7 @@ export function validateCreateAppointmentDto(body: unknown): CreateAppointmentDt
   return {
     businessId: normalizeSpaces(businessIdRaw),
     branchId: normalizeSpaces(branchIdRaw),
-    date,
-    startTime: startTime.value,
-    endTime: endTime.value,
-    serviceId: normalizeSpaces(serviceIdRaw),
-    employeeId: normalizeSpaces(employeeIdRaw),
+    appointments,
     clientId: normalizeSpaces(clientIdRaw),
     ...(clientDocumentTypeIdRaw !== undefined && {
       clientDocumentTypeId: normalizeSpaces(clientDocumentTypeIdRaw),
