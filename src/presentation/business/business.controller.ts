@@ -25,8 +25,17 @@ export class BusinessController {
       typeof req.query.id === "string" && req.query.id.trim() !== ""
         ? req.query.id.trim()
         : undefined;
+    const slug =
+      typeof req.query.slug === "string" && req.query.slug.trim() !== ""
+        ? req.query.slug.trim().toLowerCase()
+        : undefined;
     this.businessService
-      .getAllBusinesses({ page: pageRaw, pageSize, ...(id != null && { id }) })
+      .getAllBusinesses({
+        page: pageRaw,
+        pageSize,
+        ...(id != null && { id }),
+        ...(slug != null && { slug }),
+      })
       .then((result) => {
         res.status(200).json(result);
       })

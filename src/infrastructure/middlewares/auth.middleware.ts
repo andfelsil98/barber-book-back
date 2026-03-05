@@ -1,7 +1,10 @@
 import type { NextFunction, Request, Response } from "express";
 import { FirestoreDataBase } from "../../data/firestore/firestore.database";
 import { CustomError } from "../../domain/errors/custom-error";
-import { PUBLIC_ROUTE_PREFIXES } from "../../config/public-routes.config";
+import {
+  PUBLIC_ROUTE_METHOD_PATHS,
+  PUBLIC_ROUTE_PREFIXES,
+} from "../../config/public-routes.config";
 import { logger } from "../logger/logger";
 
 const BEARER_PREFIX = "Bearer ";
@@ -9,6 +12,26 @@ const BEARER_PREFIX = "Bearer ";
 function isPublicPath(path: string): boolean {
   const normalized = path.split("?")[0] ?? path;
   return PUBLIC_ROUTE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+function isPublicMethodPath(method: string, path: string): boolean {
+  const normalizedPathRaw = path.split("?")[0] ?? path;
+  const normalizedPath =
+    normalizedPathRaw.length > 1 && normalizedPathRaw.endsWith("/")
+      ? normalizedPathRaw.slice(0, -1)
+      : normalizedPathRaw;
+  const normalizedMethod = method.toUpperCase();
+
+  return PUBLIC_ROUTE_METHOD_PATHS.some((rule) => {
+    if (rule.method !== normalizedMethod) return false;
+    if (rule.match === "prefix") {
+      return (
+        normalizedPath === rule.path ||
+        normalizedPath.startsWith(`${rule.path}/`)
+      );
+    }
+    return rule.path === normalizedPath;
+  });
 }
 
 function getFirebaseAuthErrorCode(error: unknown): string {
@@ -23,7 +46,7 @@ function getFirebaseAuthErrorCode(error: unknown): string {
 export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   const path = req.originalUrl ?? req.path ?? "";
 
-  if (isPublicPath(path)) {
+  if (isPublicPath(path) || isPublicMethodPath(req.method, path)) {
     next();
     return;
   }

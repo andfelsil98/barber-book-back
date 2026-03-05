@@ -41,6 +41,7 @@ export class BusinessMembershipService {
 
   async getAllMemberships(
     params: PaginationParams & {
+      id?: string;
       userId?: string;
       email?: string;
       businessId?: string;
@@ -50,6 +51,10 @@ export class BusinessMembershipService {
     try {
       const page = Math.max(1, params.page);
       const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, params.pageSize));
+      const requestedId =
+        params.id != null && params.id.trim() !== ""
+          ? params.id.trim()
+          : undefined;
       const requestedUserId =
         params.userId != null && params.userId.trim() !== ""
           ? params.userId.trim()
@@ -93,6 +98,15 @@ export class BusinessMembershipService {
           operator: "in" as const,
           value: ["ACTIVE", "INACTIVE", "PENDING"],
         },
+        ...(requestedId != null
+          ? [
+              {
+                field: "id" as const,
+                operator: "==" as const,
+                value: requestedId,
+              },
+            ]
+          : []),
         ...(effectiveUserId != null
           ? [
               {

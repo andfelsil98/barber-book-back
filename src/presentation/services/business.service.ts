@@ -23,12 +23,18 @@ const COLLECTION_NAME = "Businesses";
 const SERVICES_COLLECTION = "Services";
 const BRANCHES_COLLECTION = "Branches";
 const BUSINESS_MEMBERSHIPS_COLLECTION = "BusinessMemberships";
+const APPOINTMENTS_COLLECTION = "Appointments";
+const BOOKINGS_COLLECTION = "Bookings";
 const USERS_COLLECTION = "Users";
 const ROOT_OWNER_ROLE_ID = "kr3ECTOcAGHnsbvDAr4y";
 const ROOT_SUPER_ADMIN_ID = "WyeIL50oCUFg9PBvB9m9";
 
 function toNameKey(value: string): string {
   return value.trim().toLowerCase();
+}
+
+interface FirestoreEntityWithId {
+  id: string;
 }
 
 export class BusinessService {
@@ -39,7 +45,7 @@ export class BusinessService {
   ) {}
 
   async getAllBusinesses(
-    params: PaginationParams & { id?: string }
+    params: PaginationParams & { id?: string; slug?: string }
   ): Promise<PaginatedResult<Business>> {
     try {
       const page = Math.max(1, params.page);
@@ -52,6 +58,9 @@ export class BusinessService {
         },
         ...(params.id != null && params.id.trim() !== ""
           ? [{ field: "id" as const, operator: "==" as const, value: params.id.trim() }]
+          : []),
+        ...(params.slug != null && params.slug.trim() !== ""
+          ? [{ field: "slug" as const, operator: "==" as const, value: params.slug.trim().toLowerCase() }]
           : []),
       ];
       return await FirestoreService.getAllPaginated<Business>(
@@ -176,6 +185,8 @@ export class BusinessService {
 
   async deleteBusiness(id: string): Promise<Business> {
     try {
+      await FirestoreService.getById<Business>(COLLECTION_NAME, id);
+
       const deletedAt = FirestoreDataBase.generateTimeStamp();
       const payload = {
         status: "DELETED" as const,
@@ -183,6 +194,8 @@ export class BusinessService {
       };
       await FirestoreService.update(COLLECTION_NAME, id, payload);
       await this.markMembershipsAsDeletedByBusiness(id, deletedAt);
+      await this.hardDeleteBusinessRelations(id);
+      await this.deleteBusinessStorageFolder(id);
       return await FirestoreService.getById<Business>(COLLECTION_NAME, id);
     } catch (error) {
       if (error instanceof CustomError) throw error;
@@ -338,6 +351,59 @@ export class BusinessService {
     });
 
     await Promise.all(updates);
+  }
+
+  private async hardDeleteBusinessRelations(businessId: string): Promise<void> {
+    const [branches, services, bookings, appointmentsByBusiness] = await Promise.all([
+      FirestoreService.getAll<FirestoreEntityWithId>(BRANCHES_COLLECTION, [
+        { field: "businessId", operator: "==", value: businessId },
+      ]),
+      FirestoreService.getAll<FirestoreEntityWithId>(SERVICES_COLLECTION, [
+        { field: "businessId", operator: "==", value: businessId },
+      ]),
+      FirestoreService.getAll<FirestoreEntityWithId>(BOOKINGS_COLLECTION, [
+        { field: "businessId", operator: "==", value: businessId },
+      ]),
+      // Compatibilidad con citas legacy que puedan tener businessId persistido.
+      FirestoreService.getAll<FirestoreEntityWithId>(APPOINTMENTS_COLLECTION, [
+        { field: "businessId", operator: "==", value: businessId },
+      ]),
+    ]);
+
+    const appointmentsByBookingList = await Promise.all(
+      bookings.map((booking) =>
+        FirestoreService.getAll<FirestoreEntityWithId>(APPOINTMENTS_COLLECTION, [
+          { field: "bookingId", operator: "==", value: booking.id },
+        ])
+      )
+    );
+
+    const appointmentIds = new Set<string>();
+    appointmentsByBusiness.forEach((appointment) => appointmentIds.add(appointment.id));
+    appointmentsByBookingList
+      .flat()
+      .forEach((appointment) => appointmentIds.add(appointment.id));
+
+    await Promise.all(
+      Array.from(appointmentIds).map((appointmentId) =>
+        FirestoreService.delete(APPOINTMENTS_COLLECTION, appointmentId)
+      )
+    );
+    await Promise.all(
+      bookings.map((booking) => FirestoreService.delete(BOOKINGS_COLLECTION, booking.id))
+    );
+    await Promise.all(
+      services.map((service) => FirestoreService.delete(SERVICES_COLLECTION, service.id))
+    );
+    await Promise.all(
+      branches.map((branch) => FirestoreService.delete(BRANCHES_COLLECTION, branch.id))
+    );
+  }
+
+  private async deleteBusinessStorageFolder(businessId: string): Promise<void> {
+    const storagePrefix = `bussinesses/${businessId}/`;
+    const bucket = FirestoreDataBase.getAdmin().storage().bucket();
+    await bucket.deleteFiles({ prefix: storagePrefix });
   }
 
   private async syncServices(

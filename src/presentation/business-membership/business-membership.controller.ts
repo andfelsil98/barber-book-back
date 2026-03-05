@@ -37,6 +37,10 @@ export class BusinessMembershipController {
       typeof req.query.userId === "string" && req.query.userId.trim() !== ""
         ? req.query.userId.trim()
         : undefined;
+    const id =
+      typeof req.query.id === "string" && req.query.id.trim() !== ""
+        ? req.query.id.trim()
+        : undefined;
     const email =
       typeof req.query.email === "string" && req.query.email.trim() !== ""
         ? req.query.email.trim()
@@ -55,6 +59,7 @@ export class BusinessMembershipController {
       .getAllMemberships({
         page: pageRaw,
         pageSize,
+        ...(id != null && { id }),
         ...(userId != null && { userId }),
         ...(email != null && { email }),
         ...(businessId != null && { businessId }),

@@ -17,19 +17,27 @@ function toNameKey(value: string): string {
 
 export class ServiceService {
   async getAllServices(
-    params: PaginationParams & { businessId?: string }
+    params: PaginationParams & { businessId?: string; id?: string; includeDeletes?: boolean }
   ): Promise<PaginatedResult<Service>> {
     try {
       const page = Math.max(1, params.page);
       const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, params.pageSize));
+      const includeDeletes = params.includeDeletes === true;
       const filters = [
-        {
-          field: "status" as const,
-          operator: "in" as const,
-          value: ["ACTIVE", "INACTIVE"],
-        },
+        ...(includeDeletes
+          ? []
+          : [
+              {
+                field: "status" as const,
+                operator: "in" as const,
+                value: ["ACTIVE", "INACTIVE"],
+              },
+            ]),
         ...(params.businessId != null && params.businessId.trim() !== ""
           ? [{ field: "businessId" as const, operator: "==" as const, value: params.businessId.trim() }]
+          : []),
+        ...(params.id != null && params.id.trim() !== ""
+          ? [{ field: "id" as const, operator: "==" as const, value: params.id.trim() }]
           : []),
       ];
       return await FirestoreService.getAllPaginated<Service>(COLLECTION_NAME, { page, pageSize }, filters);

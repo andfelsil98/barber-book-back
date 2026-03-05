@@ -23,6 +23,13 @@ export interface CreateUserData {
   documentTypeId: string;
 }
 
+export interface UpdateUserData {
+  profilePhotoUrl?: string;
+  phone?: string;
+  name?: string;
+  email?: string;
+}
+
 export class UserService {
   async existsByEmail(email: string): Promise<boolean> {
     const users = await FirestoreService.getAll<User>(COLLECTION_NAME, [
@@ -130,6 +137,46 @@ export class UserService {
       { field: "document", operator: "==", value: document },
     ]);
     return users[0] ?? null;
+  }
+
+  async updateUser(id: string, data: UpdateUserData): Promise<User> {
+    try {
+      const user = await this.getById(id);
+      if (!user) {
+        throw CustomError.notFound("No existe un usuario con este id");
+      }
+
+      const nextEmail = data.email?.trim().toLowerCase();
+      if (nextEmail && nextEmail !== user.email.toLowerCase()) {
+        const existingUserByEmail = await this.getByEmail(nextEmail);
+        if (existingUserByEmail && existingUserByEmail.id !== user.id) {
+          throw CustomError.conflict("Ya existe un usuario registrado con este correo");
+        }
+      }
+
+      const payload = {
+        ...(data.profilePhotoUrl !== undefined && { profilePhotoUrl: data.profilePhotoUrl }),
+        ...(data.phone !== undefined && { phone: data.phone }),
+        ...(data.name !== undefined && { name: data.name }),
+        ...(nextEmail !== undefined && { email: nextEmail }),
+        updatedAt: FirestoreDataBase.generateTimeStamp(),
+      };
+
+      await FirestoreService.update(COLLECTION_NAME, user.id, payload);
+      await this.syncFirebaseAuthUserIfNeeded(user.email, {
+        ...(nextEmail !== undefined && { email: nextEmail }),
+        ...(data.name !== undefined && { displayName: data.name }),
+      });
+
+      const updatedUser = await this.getById(user.id);
+      if (!updatedUser) {
+        throw CustomError.internalServerError("No se pudo recuperar el usuario actualizado");
+      }
+      return updatedUser;
+    } catch (error) {
+      if (error instanceof CustomError) throw error;
+      throw CustomError.internalServerError("Error interno del servidor");
+    }
   }
 
   async deleteUser(
@@ -244,6 +291,43 @@ export class UserService {
 
       throw CustomError.internalServerError(
         "No se pudo eliminar el usuario en Firebase Authentication"
+      );
+    }
+  }
+
+  private async syncFirebaseAuthUserIfNeeded(
+    currentEmail: string,
+    nextData: { email?: string; displayName?: string }
+  ): Promise<void> {
+    if (!nextData.email && !nextData.displayName) {
+      return;
+    }
+
+    const auth = FirestoreDataBase.getAdmin().auth();
+    try {
+      const firebaseUser = await auth.getUserByEmail(currentEmail);
+      await auth.updateUser(firebaseUser.uid, nextData);
+    } catch (error) {
+      const code =
+        typeof error === "object" &&
+        error != null &&
+        "code" in error &&
+        typeof (error as { code?: unknown }).code === "string"
+          ? (error as { code: string }).code
+          : "";
+
+      if (code === "auth/user-not-found") {
+        return;
+      }
+      if (code === "auth/email-already-exists") {
+        throw CustomError.conflict("Ya existe un usuario en Authentication con este correo");
+      }
+      if (code === "auth/invalid-email") {
+        throw CustomError.badRequest("email inválido para Firebase Authentication");
+      }
+
+      throw CustomError.internalServerError(
+        "No se pudo actualizar el usuario en Firebase Authentication"
       );
     }
   }

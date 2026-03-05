@@ -9,9 +9,9 @@ export class UsersRoutes {
     const usersController = new UsersController(userService);
 
     router.get("/", usersController.getAllUsers);
+    router.patch("/:id", usersController.updateUser);
     router.delete("/:document", usersController.deleteUser);
 
     return router;
   }
 }
-

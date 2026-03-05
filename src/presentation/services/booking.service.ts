@@ -76,6 +76,7 @@ export class BookingService {
           "Un booking debe incluir al menos un servicio/cita"
         );
       }
+      this.ensureBookingAppointmentsNotInPast(dto.appointments);
 
       await this.appointmentService.ensureBusinessAndBranch(
         dto.businessId,
@@ -119,8 +120,6 @@ export class BookingService {
         const createdAppointment =
           await this.appointmentService.createAppointmentForBooking({
             bookingId: createdBooking.id,
-            businessId: dto.businessId,
-            branchId: dto.branchId,
             date: appointmentInput.date,
             startTime: appointmentInput.startTime,
             endTime: appointmentInput.endTime,
@@ -179,6 +178,12 @@ export class BookingService {
         );
       }
 
+      await this.ensureServicesEditableForBookingUpdate(
+        existingBooking.businessId,
+        dto
+      );
+      this.ensureBookingOperationsNotInPast(dto);
+
       const appointmentIds = new Set(existingBooking.appointments);
 
       if (dto.operations != null) {
@@ -187,8 +192,6 @@ export class BookingService {
             const createdAppointment =
               await this.appointmentService.createAppointmentForBooking({
                 bookingId: existingBooking.id,
-                businessId: existingBooking.businessId,
-                branchId: nextBranchId,
                 date: operation.date,
                 startTime: operation.startTime,
                 endTime: operation.endTime,
@@ -351,6 +354,72 @@ export class BookingService {
     return this.calculateTotalPriceFromServiceIds(businessId, activeServiceIds);
   }
 
+  private ensureBookingAppointmentsNotInPast(
+    appointments: CreateBookingAppointmentDto[]
+  ): void {
+    appointments.forEach((appointment) => {
+      this.appointmentService.ensureAppointmentDateTimeIsNotPast(
+        appointment.date,
+        appointment.startTime
+      );
+    });
+  }
+
+  private ensureBookingOperationsNotInPast(dto: UpdateBookingDto): void {
+    (dto.operations ?? []).forEach((operation) => {
+      if (operation.op === "cancel") return;
+      this.appointmentService.ensureAppointmentDateTimeIsNotPast(
+        operation.date,
+        operation.startTime
+      );
+    });
+  }
+
+  private async ensureServicesEditableForBookingUpdate(
+    businessId: string,
+    dto: UpdateBookingDto
+  ): Promise<void> {
+    const requestedServiceIds = (dto.operations ?? [])
+      .filter((operation) => operation.op !== "cancel")
+      .map((operation) => operation.serviceId.trim())
+      .filter((serviceId) => serviceId !== "");
+
+    if (requestedServiceIds.length === 0) return;
+
+    const requestedUniqueServiceIds = Array.from(new Set(requestedServiceIds));
+    const services = await FirestoreService.getAll<Service>(SERVICES_COLLECTION, [
+      { field: "businessId", operator: "==", value: businessId },
+    ]);
+    const servicesById = new Map(
+      services.map((service) => [service.id.trim(), service] as const)
+    );
+
+    const deletedServiceIds: string[] = [];
+    const missingServiceIds: string[] = [];
+    for (const serviceId of requestedUniqueServiceIds) {
+      const service = servicesById.get(serviceId);
+      if (service == null) {
+        missingServiceIds.push(serviceId);
+        continue;
+      }
+      if (service.status === "DELETED") {
+        deletedServiceIds.push(serviceId);
+      }
+    }
+
+    if (deletedServiceIds.length > 0) {
+      throw CustomError.badRequest(
+        `No se puede editar el agendamiento porque estos servicios están eliminados: ${deletedServiceIds.join(", ")}`
+      );
+    }
+
+    if (missingServiceIds.length > 0) {
+      throw CustomError.badRequest(
+        `Los siguientes servicios no existen en el negocio: ${missingServiceIds.join(", ")}`
+      );
+    }
+  }
+
   private async calculateTotalPriceFromServiceIds(
     businessId: string,
     serviceIds: string[]
@@ -409,6 +478,13 @@ export class BookingService {
 
     await Promise.all(
       appointmentIds.map(async (appointmentId) => {
+        const appointment = await this.appointmentService.getAppointmentById(
+          appointmentId
+        );
+        if (appointment.status === "DELETED") {
+          return;
+        }
+
         const timestamp = FirestoreDataBase.generateTimeStamp();
         const payload: Record<string, unknown> = {
           status,

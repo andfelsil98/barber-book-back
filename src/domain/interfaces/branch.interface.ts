@@ -1,6 +1,8 @@
 export interface Branch {
   id: string;
   businessId: string;
+  score?: number;
+  reviews?: number;
   name: string;
   address: string;
   openingTime: string;

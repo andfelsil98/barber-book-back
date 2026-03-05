@@ -46,8 +46,6 @@ interface ClientData {
 
 export interface CreateAppointmentForBookingData {
   bookingId: string;
-  businessId: string;
-  branchId: string;
   date: string;
   startTime: string;
   endTime: string;
@@ -96,10 +94,6 @@ export class AppointmentService {
     try {
       const page = Math.max(1, params.page);
       const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, params.pageSize));
-      const requestedBusinessId =
-        params.businessId != null && params.businessId.trim() !== ""
-          ? params.businessId.trim()
-          : undefined;
       const includeDeletes = params.includeDeletes === true;
       const hasDateFilters =
         params.startDate != null || params.endDate != null || params.sameDate === true;
@@ -121,6 +115,15 @@ export class AppointmentService {
                 field: "id" as const,
                 operator: "==" as const,
                 value: params.id.trim(),
+              },
+            ]
+          : []),
+        ...(params.businessId != null && params.businessId.trim() !== ""
+          ? [
+              {
+                field: "businessId" as const,
+                operator: "==" as const,
+                value: params.businessId.trim(),
               },
             ]
           : []),
@@ -171,7 +174,7 @@ export class AppointmentService {
           : []),
       ];
 
-      const requiresInMemoryFiltering = hasDateFilters || requestedBusinessId != null;
+      const requiresInMemoryFiltering = hasDateFilters;
 
       if (!requiresInMemoryFiltering) {
         const result = await FirestoreService.getAllPaginated<AppointmentStored>(
@@ -187,41 +190,6 @@ export class AppointmentService {
         };
       }
 
-      let allowedBookingIds: Set<string> | null = null;
-      if (requestedBusinessId) {
-        const bookings = await FirestoreService.getAll<Booking>(BOOKINGS_COLLECTION, [
-          { field: "businessId", operator: "==", value: requestedBusinessId },
-          ...(includeDeletes
-            ? []
-            : [
-                {
-                  field: "status" as const,
-                  operator: "in" as const,
-                  value: ["CREATED", "CANCELLED", "FINISHED"],
-                },
-              ]),
-        ]);
-        allowedBookingIds = new Set(
-          bookings
-            .map((booking) => booking.id.trim())
-            .filter((bookingId) => bookingId !== "")
-        );
-        if (allowedBookingIds.size === 0) {
-          if (hasDateFilters) {
-            return {
-              data: [],
-              total: 0,
-              pagination: buildPagination(1, 1, 0),
-            };
-          }
-          return {
-            data: [],
-            total: 0,
-            pagination: buildPagination(page, pageSize, 0),
-          };
-        }
-      }
-
       const orderedAppointments = await FirestoreService.getAll<AppointmentStored>(
         COLLECTION_NAME,
         filters,
@@ -231,14 +199,7 @@ export class AppointmentService {
         }
       );
 
-      const filteredAppointments =
-        allowedBookingIds == null
-          ? orderedAppointments
-          : orderedAppointments.filter((appointment) =>
-              allowedBookingIds!.has((appointment.bookingId ?? "").trim())
-            );
-
-      const mapped = filteredAppointments.map((appointment) =>
+      const mapped = orderedAppointments.map((appointment) =>
         this.mapAppointmentToResponse(appointment)
       );
 
@@ -268,6 +229,8 @@ export class AppointmentService {
     let createdAppointmentId: string | null = null;
 
     try {
+      this.ensureAppointmentDateTimeIsNotPast(dto.date, dto.startTime);
+
       await this.ensureBusinessAndBranch(dto.businessId, dto.branchId);
       await this.ensureClientForBusiness(dto.businessId, {
         document: dto.clientId,
@@ -308,8 +271,6 @@ export class AppointmentService {
 
       const createdAppointment = await this.createAppointmentForBooking({
         bookingId: createdBooking.id,
-        businessId: dto.businessId,
-        branchId: dto.branchId,
         date: dto.date,
         startTime: dto.startTime,
         endTime: dto.endTime,
@@ -352,14 +313,29 @@ export class AppointmentService {
     data: CreateAppointmentForBookingData
   ): Promise<Appointment> {
     try {
-      const branch = await this.ensureBusinessAndBranch(data.businessId, data.branchId);
-      await this.ensureServiceExistsInBusiness(data.serviceId, data.businessId);
+      this.ensureAppointmentDateTimeIsNotPast(data.date, data.startTime);
+
+      const booking = await FirestoreService.getById<Booking>(
+        BOOKINGS_COLLECTION,
+        data.bookingId
+      );
+      if (booking.status === "DELETED") {
+        throw CustomError.badRequest(
+          "No se puede crear una cita para un booking eliminado"
+        );
+      }
+
+      const branch = await this.ensureBusinessAndBranch(
+        booking.businessId,
+        booking.branchId
+      );
+      await this.ensureServiceExistsInBusiness(data.serviceId, booking.businessId);
       this.ensureTimeRangeWithinBranchSchedule(
         branch,
         data.startTime,
         data.endTime
       );
-      await this.ensureEmployeeIsActiveInBusiness(data.employeeId, data.businessId);
+      await this.ensureEmployeeIsActiveInBusiness(data.employeeId, booking.businessId);
       await this.ensureNoEmployeeScheduleConflict(
         data.employeeId,
         data.date,
@@ -368,6 +344,7 @@ export class AppointmentService {
       );
 
       const created = await FirestoreService.create<{
+        businessId: string;
         date: string;
         startTime: string;
         endTime: string;
@@ -377,6 +354,7 @@ export class AppointmentService {
         bookingId: string;
         createdAt: ReturnType<typeof FirestoreDataBase.generateTimeStamp>;
       }>(COLLECTION_NAME, {
+        businessId: booking.businessId,
         date: data.date,
         startTime: data.startTime,
         endTime: data.endTime,
@@ -405,6 +383,8 @@ export class AppointmentService {
     opts?: UpdateAppointmentOptions
   ): Promise<Appointment> {
     try {
+      this.ensureAppointmentDateTimeIsNotPast(dto.date, dto.startTime);
+
       const existingAppointment = await this.getStoredAppointmentById(id);
       if (existingAppointment.status === "DELETED") {
         throw CustomError.badRequest("No se puede editar una cita eliminada");
@@ -647,6 +627,40 @@ export class AppointmentService {
 
   async ensureClientForBusiness(businessId: string, clientData: ClientData): Promise<void> {
     await this.ensureClientForAppointment(businessId, clientData);
+  }
+
+  public ensureAppointmentDateTimeIsNotPast(date: string, startTime: string): void {
+    const dateMatch = date.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const timeMatch = startTime.trim().match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+    if (!dateMatch || !timeMatch) {
+      throw CustomError.badRequest(
+        "date y startTime deben tener formato válido (YYYY-MM-DD y HH:mm)"
+      );
+    }
+
+    const year = Number(dateMatch[1]);
+    const month = Number(dateMatch[2]);
+    const day = Number(dateMatch[3]);
+    const hours = Number(timeMatch[1]);
+    const minutes = Number(timeMatch[2]);
+
+    const appointmentDateTime = new Date(year, month - 1, day, hours, minutes, 0, 0);
+    if (
+      Number.isNaN(appointmentDateTime.getTime()) ||
+      appointmentDateTime.getFullYear() !== year ||
+      appointmentDateTime.getMonth() !== month - 1 ||
+      appointmentDateTime.getDate() !== day
+    ) {
+      throw CustomError.badRequest(
+        "date y startTime deben representar una fecha y hora válidas"
+      );
+    }
+
+    if (appointmentDateTime.getTime() < Date.now()) {
+      throw CustomError.badRequest(
+        "La fecha y hora de la cita no pueden ser anteriores al momento actual"
+      );
+    }
   }
 
   private async ensureBusinessExists(businessId: string): Promise<void> {
@@ -990,6 +1004,7 @@ export class AppointmentService {
 
     return {
       id: appointment.id,
+      businessId: appointment.businessId?.trim() ?? "",
       date:
         appointment.date instanceof Timestamp
           ? appointment.date.toDate().toISOString().split("T")[0]!

@@ -10,6 +10,7 @@ import { BusinessMembershipRoutes } from "./business-membership/routes";
 import { UsersRoutes } from "./users/routes";
 import { AppointmentRoutes } from "./appointment/routes";
 import { BookingRoutes } from "./booking/routes";
+import { ReviewRoutes } from "./review/routes";
 
 export class AppRoutes {
   static get routes(): Router {
@@ -25,6 +26,7 @@ export class AppRoutes {
     router.use("/api/users", UsersRoutes.routes);
     router.use("/api/appointments", AppointmentRoutes.routes);
     router.use("/api/bookings", BookingRoutes.routes);
+    router.use("/api/reviews", ReviewRoutes.routes);
     return router;
   }
 }

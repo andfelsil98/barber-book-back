@@ -6,6 +6,7 @@ import {
 } from "../../domain/interfaces/pagination.interface";
 import type { UserService } from "../services/user.service";
 import { CustomError } from "../../domain/errors/custom-error";
+import { validateUpdateUserDto, validateUserIdParam } from "./dtos/update-user.dto";
 
 export class UsersController {
   constructor(private readonly userService: UserService) {}
@@ -84,6 +85,18 @@ export class UsersController {
       .deleteUser(document, deleteOpts)
       .then((result) => {
         res.status(200).json(result);
+      })
+      .catch(next);
+  };
+
+  public updateUser = (req: Request, res: Response, next: NextFunction) => {
+    const id = validateUserIdParam(req.params.id);
+    const dto = validateUpdateUserDto(req.body);
+
+    this.userService
+      .updateUser(id, dto)
+      .then((user) => {
+        res.status(200).json(user);
       })
       .catch(next);
   };
