@@ -1,5 +1,8 @@
 import { CustomError } from "../../../domain/errors/custom-error";
-import type { BookingStatus } from "../../../domain/interfaces/booking.interface";
+import type {
+  BookingPaymentMethod,
+  BookingStatus,
+} from "../../../domain/interfaces/booking.interface";
 import { normalizeSpaces } from "../../../domain/utils/string.utils";
 
 export type BookingOperationType = "add" | "update" | "cancel";
@@ -41,9 +44,20 @@ export interface UpdateBookingDto {
   clientName?: string;
   clientPhone?: string;
   clientEmail?: string;
+  paymentMethod?: BookingPaymentMethod;
+  paidAmount?: number;
   status?: BookingStatus;
   operations?: BookingAppointmentOperationDto[];
 }
+
+const PAYMENT_METHODS: BookingPaymentMethod[] = [
+  "CASH",
+  "NEQUI",
+  "DAVIPLATA",
+  "QR",
+  "CARD",
+  "TRANSFER",
+];
 
 export function validateBookingIdParam(id: unknown): string {
   if (id == null || typeof id !== "string" || id.trim() === "") {
@@ -220,6 +234,34 @@ export function validateUpdateBookingDto(body: unknown): UpdateBookingDto {
   const clientPhone = validateOptionalStringField(parsedBody.clientPhone, "clientPhone");
   const clientEmail = validateOptionalStringField(parsedBody.clientEmail, "clientEmail");
 
+  const paymentMethodRaw = parsedBody.paymentMethod;
+  let paymentMethod: BookingPaymentMethod | undefined;
+  if (paymentMethodRaw !== undefined) {
+    if (typeof paymentMethodRaw !== "string" || paymentMethodRaw.trim() === "") {
+      throw CustomError.badRequest(
+        "paymentMethod debe ser un texto no vacío cuando se proporcione"
+      );
+    }
+    const normalizedPaymentMethod = normalizeSpaces(paymentMethodRaw).toUpperCase() as BookingPaymentMethod;
+    if (!PAYMENT_METHODS.includes(normalizedPaymentMethod)) {
+      throw CustomError.badRequest(
+        `paymentMethod debe ser uno de: ${PAYMENT_METHODS.join(", ")}`
+      );
+    }
+    paymentMethod = normalizedPaymentMethod;
+  }
+
+  const paidAmountRaw = parsedBody.paidAmount;
+  let paidAmount: number | undefined;
+  if (paidAmountRaw !== undefined) {
+    if (typeof paidAmountRaw !== "number" || Number.isNaN(paidAmountRaw) || paidAmountRaw < 0) {
+      throw CustomError.badRequest(
+        "paidAmount debe ser un número mayor o igual a 0 cuando se proporcione"
+      );
+    }
+    paidAmount = paidAmountRaw;
+  }
+
   if (
     clientId === undefined &&
     (clientDocumentTypeId !== undefined ||
@@ -275,6 +317,8 @@ export function validateUpdateBookingDto(body: unknown): UpdateBookingDto {
   if (
     branchId === undefined &&
     clientId === undefined &&
+    paymentMethod === undefined &&
+    paidAmount === undefined &&
     status === undefined &&
     operations === undefined
   ) {
@@ -291,6 +335,8 @@ export function validateUpdateBookingDto(body: unknown): UpdateBookingDto {
     ...(clientName !== undefined && { clientName }),
     ...(clientPhone !== undefined && { clientPhone }),
     ...(clientEmail !== undefined && { clientEmail }),
+    ...(paymentMethod !== undefined && { paymentMethod }),
+    ...(paidAmount !== undefined && { paidAmount }),
     ...(status !== undefined && { status }),
     ...(operations !== undefined && { operations }),
   };

@@ -8,6 +8,7 @@ import type {
 } from "../../domain/interfaces/pagination.interface";
 import { MAX_PAGE_SIZE } from "../../domain/interfaces/pagination.interface";
 import type { User } from "../../domain/interfaces/user.interface";
+import { logger } from "../../infrastructure/logger/logger";
 import FirestoreService from "./firestore.service";
 
 const COLLECTION_NAME = "Users";
@@ -272,22 +273,24 @@ export class UserService {
   }
 
   private async deleteFirebaseAuthUserByEmail(email: string): Promise<void> {
+    if (email.trim() === "") {
+      return;
+    }
+
     const auth = FirestoreDataBase.getAdmin().auth();
     try {
       const firebaseUser = await auth.getUserByEmail(email);
       await auth.deleteUser(firebaseUser.uid);
     } catch (error) {
-      const code =
-        typeof error === "object" &&
-        error != null &&
-        "code" in error &&
-        typeof (error as { code?: unknown }).code === "string"
-          ? (error as { code: string }).code
-          : "";
-
-      if (code === "auth/user-not-found") {
+      if (this.isFirebaseUserNotFoundError(error)) {
         return;
       }
+
+      logger.error(
+        `[UserService.deleteFirebaseAuthUserByEmail] Firebase Auth delete failed. code=${this.extractFirebaseAuthErrorCode(
+          error
+        )} details=${this.extractFirebaseAuthErrorText(error)}`
+      );
 
       throw CustomError.internalServerError(
         "No se pudo eliminar el usuario en Firebase Authentication"
@@ -308,15 +311,9 @@ export class UserService {
       const firebaseUser = await auth.getUserByEmail(currentEmail);
       await auth.updateUser(firebaseUser.uid, nextData);
     } catch (error) {
-      const code =
-        typeof error === "object" &&
-        error != null &&
-        "code" in error &&
-        typeof (error as { code?: unknown }).code === "string"
-          ? (error as { code: string }).code
-          : "";
+      const code = this.extractFirebaseAuthErrorCode(error);
 
-      if (code === "auth/user-not-found") {
+      if (this.isFirebaseUserNotFoundError(error)) {
         return;
       }
       if (code === "auth/email-already-exists") {
@@ -330,6 +327,94 @@ export class UserService {
         "No se pudo actualizar el usuario en Firebase Authentication"
       );
     }
+  }
+
+  private extractFirebaseAuthErrorCode(error: unknown): string {
+    if (typeof error !== "object" || error == null) {
+      return "";
+    }
+
+    const code =
+      "code" in error && typeof (error as { code?: unknown }).code === "string"
+        ? (error as { code: string }).code
+        : "";
+    if (code !== "") {
+      return code.toLowerCase();
+    }
+
+    const nestedCode =
+      "errorInfo" in error &&
+      typeof (error as { errorInfo?: unknown }).errorInfo === "object" &&
+      (error as { errorInfo?: Record<string, unknown> }).errorInfo != null &&
+      typeof (error as { errorInfo: Record<string, unknown> }).errorInfo.code === "string"
+        ? (error as { errorInfo: { code: string } }).errorInfo.code
+        : "";
+    return nestedCode.toLowerCase();
+  }
+
+  private isFirebaseUserNotFoundCode(code: string): boolean {
+    const normalizedCode = code.trim().toLowerCase();
+    return (
+      normalizedCode === "auth/user-not-found" ||
+      normalizedCode === "user-not-found" ||
+      normalizedCode === "auth/user_not_found" ||
+      normalizedCode === "user_not_found"
+    );
+  }
+
+  private extractFirebaseAuthErrorText(error: unknown): string {
+    if (typeof error !== "object" || error == null) {
+      return "";
+    }
+
+    const topLevelMessage =
+      "message" in error && typeof (error as { message?: unknown }).message === "string"
+        ? (error as { message: string }).message
+        : "";
+
+    const nestedMessage =
+      "errorInfo" in error &&
+      typeof (error as { errorInfo?: unknown }).errorInfo === "object" &&
+      (error as { errorInfo?: Record<string, unknown> }).errorInfo != null &&
+      typeof (error as { errorInfo: Record<string, unknown> }).errorInfo.message === "string"
+        ? (error as { errorInfo: { message: string } }).errorInfo.message
+        : "";
+
+    const nestedDetails =
+      "errorInfo" in error &&
+      typeof (error as { errorInfo?: unknown }).errorInfo === "object" &&
+      (error as { errorInfo?: Record<string, unknown> }).errorInfo != null &&
+      typeof (error as { errorInfo: Record<string, unknown> }).errorInfo.details === "string"
+        ? (error as { errorInfo: { details: string } }).errorInfo.details
+        : "";
+
+    const serialized = (() => {
+      try {
+        return JSON.stringify(error);
+      } catch {
+        return "";
+      }
+    })();
+
+    return `${topLevelMessage} ${nestedMessage} ${nestedDetails} ${serialized}`
+      .trim()
+      .toLowerCase();
+  }
+
+  private isFirebaseUserNotFoundError(error: unknown): boolean {
+    const code = this.extractFirebaseAuthErrorCode(error);
+    if (this.isFirebaseUserNotFoundCode(code)) {
+      return true;
+    }
+
+    const errorText = this.extractFirebaseAuthErrorText(error);
+    return (
+      errorText.includes("user-not-found") ||
+      errorText.includes("user_not_found") ||
+      errorText.includes("no user record") ||
+      errorText.includes("user may have been deleted") ||
+      errorText.includes("no user exists")
+    );
   }
 
 }

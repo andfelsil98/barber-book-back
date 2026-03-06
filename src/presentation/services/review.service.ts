@@ -234,6 +234,28 @@ export class ReviewService {
     }
   }
 
+  async deleteReviewsByAppointmentId(appointmentId: string): Promise<void> {
+    const reviews = await FirestoreService.getAll<Review>(COLLECTION_NAME, [
+      { field: "appointmentId", operator: "==", value: appointmentId },
+    ]);
+    await Promise.all(reviews.map((review) => this.deleteReview(review.id)));
+  }
+
+  async deleteReviewsByAppointmentIds(appointmentIds: string[]): Promise<void> {
+    const uniqueAppointmentIds = Array.from(
+      new Set(
+        appointmentIds
+          .map((appointmentId) => appointmentId.trim())
+          .filter((appointmentId) => appointmentId !== "")
+      )
+    );
+    await Promise.all(
+      uniqueAppointmentIds.map((appointmentId) =>
+        this.deleteReviewsByAppointmentId(appointmentId)
+      )
+    );
+  }
+
   private async getBusinessOrFail(id: string): Promise<Business> {
     const businesses = await FirestoreService.getAll<Business>(BUSINESSES_COLLECTION, [
       { field: "id", operator: "==", value: id },

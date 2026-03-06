@@ -19,6 +19,7 @@ import { MAX_PAGE_SIZE, buildPagination } from "../../domain/interfaces/paginati
 import type { CreateAppointmentDto } from "../appointment/dtos/create-appointment.dto";
 import type { UpdateAppointmentDto } from "../appointment/dtos/update-appointment.dto";
 import FirestoreService from "./firestore.service";
+import { ReviewService } from "./review.service";
 
 const COLLECTION_NAME = "Appointments";
 const BOOKINGS_COLLECTION = "Bookings";
@@ -79,6 +80,10 @@ export interface UpdateAppointmentOptions {
 }
 
 export class AppointmentService {
+  constructor(
+    private readonly reviewService: ReviewService = new ReviewService()
+  ) {}
+
   async getAllAppointments(
     params: PaginationParams & {
       businessId?: string;
@@ -232,6 +237,68 @@ export class AppointmentService {
       this.ensureAppointmentDateTimeIsNotPast(dto.date, dto.startTime);
 
       await this.ensureBusinessAndBranch(dto.businessId, dto.branchId);
+      const service = await this.ensureServiceExistsInBusiness(
+        dto.serviceId,
+        dto.businessId
+      );
+
+      if (dto.bookingId && dto.bookingId.trim() !== "") {
+        const booking = await FirestoreService.getById<Booking>(
+          BOOKINGS_COLLECTION,
+          dto.bookingId
+        );
+        if (booking.status !== "CREATED") {
+          throw CustomError.badRequest(
+            "Solo se pueden agregar citas a bookings con estado CREATED"
+          );
+        }
+        if (booking.businessId !== dto.businessId || booking.branchId !== dto.branchId) {
+          throw CustomError.badRequest(
+            "El bookingId no corresponde al businessId/branchId enviado"
+          );
+        }
+        if (dto.clientId !== "" && booking.clientId !== dto.clientId) {
+          throw CustomError.badRequest(
+            "clientId no coincide con el cliente del booking enviado"
+          );
+        }
+
+        const createdAppointment = await this.createAppointmentForBooking({
+          bookingId: booking.id,
+          date: dto.date,
+          startTime: dto.startTime,
+          endTime: dto.endTime,
+          serviceId: dto.serviceId,
+          employeeId: dto.employeeId,
+        });
+        createdAppointmentId = createdAppointment.id;
+
+        const nextAppointments = Array.from(
+          new Set([...(booking.appointments ?? []), createdAppointment.id])
+        );
+        const currentTotalAmount =
+          Number.isFinite(booking.totalAmount) && booking.totalAmount >= 0
+            ? booking.totalAmount
+            : 0;
+        const currentPaidAmount =
+          Number.isFinite(booking.paidAmount) && booking.paidAmount >= 0
+            ? booking.paidAmount
+            : 0;
+        const nextTotalAmount = currentTotalAmount + service.price;
+
+        await FirestoreService.update(BOOKINGS_COLLECTION, booking.id, {
+          appointments: nextAppointments,
+          totalAmount: nextTotalAmount,
+          paymentStatus: this.resolveBookingPaymentStatus(
+            nextTotalAmount,
+            currentPaidAmount
+          ),
+          updatedAt: FirestoreDataBase.generateTimeStamp(),
+        });
+
+        return createdAppointment;
+      }
+
       await this.ensureClientForBusiness(dto.businessId, {
         document: dto.clientId,
         ...(dto.clientDocumentTypeId !== undefined && {
@@ -245,18 +312,16 @@ export class AppointmentService {
         ...(dto.clientEmail !== undefined && { email: dto.clientEmail }),
       });
 
-      const service = await this.ensureServiceExistsInBusiness(
-        dto.serviceId,
-        dto.businessId
-      );
-
       const createdBooking = await FirestoreService.create<{
         businessId: string;
         branchId: string;
         appointments: string[];
         clientId: string;
         status: "CREATED";
-        totalPrice: number;
+        totalAmount: number;
+        paymentMethod: "CASH";
+        paidAmount: number;
+        paymentStatus: "PENDING";
         createdAt: ReturnType<typeof FirestoreDataBase.generateTimeStamp>;
       }>(BOOKINGS_COLLECTION, {
         businessId: dto.businessId,
@@ -264,7 +329,10 @@ export class AppointmentService {
         appointments: [],
         clientId: dto.clientId,
         status: "CREATED",
-        totalPrice: service.price,
+        totalAmount: service.price,
+        paymentMethod: "CASH",
+        paidAmount: 0,
+        paymentStatus: "PENDING",
         createdAt: FirestoreDataBase.generateTimeStamp(),
       });
       createdBookingId = createdBooking.id;
@@ -492,6 +560,8 @@ export class AppointmentService {
         throw CustomError.badRequest("La cita ya se encuentra eliminada");
       }
 
+      await this.reviewService.deleteReviewsByAppointmentId(id);
+
       await FirestoreService.update(COLLECTION_NAME, id, {
         status: "DELETED",
         deletedAt: FirestoreDataBase.generateTimeStamp(),
@@ -536,7 +606,7 @@ export class AppointmentService {
 
       const now = FirestoreDataBase.generateTimeStamp();
       const payload: Record<string, unknown> = {
-        totalPrice: await this.calculateBookingTotalPrice(
+        totalAmount: await this.calculateBookingTotalPrice(
           booking.businessId,
           appointments
         ),
@@ -1026,5 +1096,18 @@ export class AppointmentService {
         updatedAt: appointment.updatedAt,
       }),
     };
+  }
+
+  private resolveBookingPaymentStatus(
+    totalAmount: number,
+    paidAmount: number
+  ): "PENDING" | "PARTIALLY_PAID" | "PAID" {
+    if (totalAmount <= 0 || paidAmount <= 0) {
+      return "PENDING";
+    }
+    if (paidAmount >= totalAmount) {
+      return "PAID";
+    }
+    return "PARTIALLY_PAID";
   }
 }

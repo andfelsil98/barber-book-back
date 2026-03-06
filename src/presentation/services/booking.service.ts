@@ -3,6 +3,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { CustomError } from "../../domain/errors/custom-error";
 import type {
   Booking,
+  BookingPaymentStatus,
   BookingStatus,
 } from "../../domain/interfaces/booking.interface";
 import type { Service } from "../../domain/interfaces/service.interface";
@@ -18,6 +19,7 @@ import type {
 import type { UpdateBookingDto } from "../booking/dtos/update-booking.dto";
 import FirestoreService from "./firestore.service";
 import { AppointmentService } from "./appointment.service";
+import { ReviewService } from "./review.service";
 
 const BOOKINGS_COLLECTION = "Bookings";
 const APPOINTMENTS_COLLECTION = "Appointments";
@@ -25,7 +27,8 @@ const SERVICES_COLLECTION = "Services";
 
 export class BookingService {
   constructor(
-    private readonly appointmentService: AppointmentService = new AppointmentService()
+    private readonly appointmentService: AppointmentService = new AppointmentService(),
+    private readonly reviewService: ReviewService = new ReviewService()
   ) {}
 
   async getAllBookings(
@@ -96,6 +99,13 @@ export class BookingService {
       });
 
       const totalPrice = await this.calculateTotalPrice(dto.businessId, dto.appointments);
+      const paidAmount = dto.paidAmount ?? 0;
+      if (paidAmount > totalPrice) {
+        throw CustomError.badRequest(
+          "paidAmount no puede ser mayor al totalAmount"
+        );
+      }
+      const paymentStatus = this.resolvePaymentStatus(totalPrice, paidAmount);
 
       const createdBooking = await FirestoreService.create<{
         businessId: string;
@@ -103,7 +113,10 @@ export class BookingService {
         appointments: string[];
         clientId: string;
         status: "CREATED";
-        totalPrice: number;
+        totalAmount: number;
+        paymentMethod: CreateBookingDto["paymentMethod"];
+        paidAmount: number;
+        paymentStatus: BookingPaymentStatus;
         createdAt: ReturnType<typeof FirestoreDataBase.generateTimeStamp>;
       }>(BOOKINGS_COLLECTION, {
         businessId: dto.businessId,
@@ -111,7 +124,10 @@ export class BookingService {
         appointments: [],
         clientId: dto.clientId,
         status: "CREATED",
-        totalPrice,
+        totalAmount: totalPrice,
+        paymentMethod: dto.paymentMethod,
+        paidAmount,
+        paymentStatus,
         createdAt: FirestoreDataBase.generateTimeStamp(),
       });
       createdBookingId = createdBooking.id;
@@ -178,10 +194,13 @@ export class BookingService {
         );
       }
 
-      await this.ensureServicesEditableForBookingUpdate(
-        existingBooking.businessId,
-        dto
-      );
+      const isDeletingBooking = dto.status === "DELETED";
+      if (!isDeletingBooking) {
+        await this.ensureServicesEditableForBookingUpdate(
+          existingBooking.businessId,
+          dto
+        );
+      }
       this.ensureBookingOperationsNotInPast(dto);
 
       const appointmentIds = new Set(existingBooking.appointments);
@@ -242,12 +261,27 @@ export class BookingService {
         );
       }
 
-      const payload: Record<string, unknown> = {
-        appointments: normalizedAppointmentIds,
-        totalPrice: await this.calculateTotalPriceFromAppointments(
+      let totalAmount = existingBooking.totalAmount;
+      let paidAmount = dto.paidAmount ?? existingBooking.paidAmount;
+      let paymentStatus = existingBooking.paymentStatus;
+      if (!isDeletingBooking) {
+        totalAmount = await this.calculateTotalPriceFromAppointments(
           existingBooking.businessId,
           normalizedAppointmentIds
-        ),
+        );
+        if (paidAmount > totalAmount) {
+          throw CustomError.badRequest(
+            "paidAmount no puede ser mayor al totalAmount"
+          );
+        }
+        paymentStatus = this.resolvePaymentStatus(totalAmount, paidAmount);
+      }
+
+      const payload: Record<string, unknown> = {
+        appointments: normalizedAppointmentIds,
+        totalAmount,
+        paidAmount,
+        paymentStatus,
         updatedAt: FirestoreDataBase.generateTimeStamp(),
       };
 
@@ -258,8 +292,16 @@ export class BookingService {
       if (dto.clientId !== undefined) {
         payload.clientId = dto.clientId;
       }
+      if (dto.paymentMethod !== undefined) {
+        payload.paymentMethod = dto.paymentMethod;
+      }
 
       if (dto.status !== undefined) {
+        if (dto.status === "DELETED") {
+          await this.reviewService.deleteReviewsByAppointmentIds(
+            normalizedAppointmentIds
+          );
+        }
         await this.applyStatusToAppointments(dto.status, normalizedAppointmentIds);
         payload.status = dto.status;
 
@@ -274,10 +316,9 @@ export class BookingService {
           payload.deletedAt = FieldValue.delete();
         }
 
-        payload.totalPrice = await this.calculateTotalPriceFromAppointments(
-          existingBooking.businessId,
-          normalizedAppointmentIds
-        );
+        payload.totalAmount = totalAmount;
+        payload.paidAmount = paidAmount;
+        payload.paymentStatus = paymentStatus;
       }
 
       await FirestoreService.update(BOOKINGS_COLLECTION, id, payload);
@@ -521,10 +562,37 @@ export class BookingService {
       )
     );
 
+    const legacyBooking = booking as Booking & { totalPrice?: number };
+    const totalAmount =
+      Number.isFinite(booking.totalAmount) && booking.totalAmount >= 0
+        ? booking.totalAmount
+        : Number.isFinite(legacyBooking.totalPrice) && (legacyBooking.totalPrice ?? 0) >= 0
+          ? (legacyBooking.totalPrice as number)
+          : 0;
+    const paidAmount =
+      Number.isFinite(booking.paidAmount) && booking.paidAmount >= 0
+        ? booking.paidAmount
+        : 0;
+
     return {
       ...booking,
       appointments,
-      totalPrice: Number.isFinite(booking.totalPrice) ? booking.totalPrice : 0,
+      totalAmount,
+      paidAmount,
+      paymentStatus: this.resolvePaymentStatus(totalAmount, paidAmount),
     };
+  }
+
+  private resolvePaymentStatus(
+    totalAmount: number,
+    paidAmount: number
+  ): BookingPaymentStatus {
+    if (totalAmount <= 0 || paidAmount <= 0) {
+      return "PENDING";
+    }
+    if (paidAmount >= totalAmount) {
+      return "PAID";
+    }
+    return "PARTIALLY_PAID";
   }
 }

@@ -1,4 +1,5 @@
 import { CustomError } from "../../../domain/errors/custom-error";
+import type { BookingPaymentMethod } from "../../../domain/interfaces/booking.interface";
 import { normalizeSpaces } from "../../../domain/utils/string.utils";
 
 export interface CreateBookingAppointmentDto {
@@ -19,7 +20,18 @@ export interface CreateBookingDto {
   clientName?: string;
   clientPhone?: string;
   clientEmail?: string;
+  paymentMethod: BookingPaymentMethod;
+  paidAmount?: number;
 }
+
+const PAYMENT_METHODS: BookingPaymentMethod[] = [
+  "CASH",
+  "NEQUI",
+  "DAVIPLATA",
+  "QR",
+  "CARD",
+  "TRANSFER",
+];
 
 function parseIsoDateOrThrow(rawValue: string, fieldPath: string): string {
   const value = normalizeSpaces(rawValue);
@@ -204,6 +216,30 @@ export function validateCreateBookingDto(body: unknown): CreateBookingDto {
     );
   }
 
+  const paymentMethodRaw = parsedBody.paymentMethod;
+  if (typeof paymentMethodRaw !== "string" || paymentMethodRaw.trim() === "") {
+    throw CustomError.badRequest(
+      "paymentMethod es requerido y debe ser un texto no vacío"
+    );
+  }
+  const paymentMethod = normalizeSpaces(paymentMethodRaw).toUpperCase() as BookingPaymentMethod;
+  if (!PAYMENT_METHODS.includes(paymentMethod)) {
+    throw CustomError.badRequest(
+      `paymentMethod debe ser uno de: ${PAYMENT_METHODS.join(", ")}`
+    );
+  }
+
+  const paidAmountRaw = parsedBody.paidAmount;
+  let paidAmount: number | undefined;
+  if (paidAmountRaw !== undefined) {
+    if (typeof paidAmountRaw !== "number" || Number.isNaN(paidAmountRaw) || paidAmountRaw < 0) {
+      throw CustomError.badRequest(
+        "paidAmount debe ser un número mayor o igual a 0 cuando se proporcione"
+      );
+    }
+    paidAmount = paidAmountRaw;
+  }
+
   return {
     businessId: normalizeSpaces(businessIdRaw),
     branchId: normalizeSpaces(branchIdRaw),
@@ -224,5 +260,7 @@ export function validateCreateBookingDto(body: unknown): CreateBookingDto {
     ...(clientEmailRaw !== undefined && {
       clientEmail: normalizeSpaces(clientEmailRaw),
     }),
+    paymentMethod,
+    ...(paidAmount !== undefined && { paidAmount }),
   };
 }

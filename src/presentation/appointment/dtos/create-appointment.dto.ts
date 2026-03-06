@@ -4,6 +4,7 @@ import { normalizeSpaces } from "../../../domain/utils/string.utils";
 export interface CreateAppointmentDto {
   businessId: string;
   branchId: string;
+  bookingId?: string;
   date: string;
   startTime: string;
   endTime: string;
@@ -79,6 +80,16 @@ export function validateCreateAppointmentDto(body: unknown): CreateAppointmentDt
       "branchId es requerido y debe ser un texto no vacío"
     );
   }
+  const bookingIdRaw = parsedBody.bookingId;
+  let bookingId: string | undefined;
+  if (bookingIdRaw !== undefined) {
+    if (typeof bookingIdRaw !== "string" || bookingIdRaw.trim() === "") {
+      throw CustomError.badRequest(
+        "bookingId debe ser un texto no vacío cuando se proporcione"
+      );
+    }
+    bookingId = normalizeSpaces(bookingIdRaw);
+  }
 
   const dateRaw = parsedBody.date;
   if (typeof dateRaw !== "string" || dateRaw.trim() === "") {
@@ -123,8 +134,13 @@ export function validateCreateAppointmentDto(body: unknown): CreateAppointmentDt
   }
 
   const clientIdRaw = parsedBody.clientId;
-  if (typeof clientIdRaw !== "string" || clientIdRaw.trim() === "") {
-    throw CustomError.badRequest("clientId es requerido y debe ser un texto no vacío");
+  if (
+    bookingId === undefined &&
+    (typeof clientIdRaw !== "string" || clientIdRaw.trim() === "")
+  ) {
+    throw CustomError.badRequest(
+      "clientId es requerido y debe ser un texto no vacío cuando no se envía bookingId"
+    );
   }
 
   const clientDocumentTypeIdRaw = parsedBody.clientDocumentTypeId;
@@ -182,12 +198,16 @@ export function validateCreateAppointmentDto(body: unknown): CreateAppointmentDt
   return {
     businessId: normalizeSpaces(businessIdRaw),
     branchId: normalizeSpaces(branchIdRaw),
+    ...(bookingId !== undefined && { bookingId }),
     date,
     startTime: startTime.value,
     endTime: endTime.value,
     serviceId: normalizeSpaces(serviceIdRaw),
     employeeId: normalizeSpaces(employeeIdRaw),
-    clientId: normalizeSpaces(clientIdRaw),
+    clientId:
+      typeof clientIdRaw === "string" && clientIdRaw.trim() !== ""
+        ? normalizeSpaces(clientIdRaw)
+        : "",
     ...(clientDocumentTypeIdRaw !== undefined && {
       clientDocumentTypeId: normalizeSpaces(clientDocumentTypeIdRaw),
     }),
