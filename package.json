@@ -23,6 +23,7 @@
     "typescript": "^5.8.2"
   },
   "dependencies": {
+    "@google-cloud/tasks": "^6.2.1",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "env-var": "^7.5.0",

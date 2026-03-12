@@ -1,6 +1,7 @@
 import { FirestoreDataBase } from "../../data/firestore/firestore.database";
 import { FieldValue } from "firebase-admin/firestore";
 import { CustomError } from "../../domain/errors/custom-error";
+import type { Appointment } from "../../domain/interfaces/appointment.interface";
 import type {
   Booking,
   BookingPaymentStatus,
@@ -20,6 +21,10 @@ import type { UpdateBookingDto } from "../booking/dtos/update-booking.dto";
 import FirestoreService from "./firestore.service";
 import { AppointmentService } from "./appointment.service";
 import { ReviewService } from "./review.service";
+import type { AppointmentStatusTaskScheduler } from "./appointment-status-task-scheduler.service";
+import { logger } from "../../infrastructure/logger/logger";
+import type { WhatsAppService } from "./whatsapp.service";
+import { UserService } from "./user.service";
 
 const BOOKINGS_COLLECTION = "Bookings";
 const APPOINTMENTS_COLLECTION = "Appointments";
@@ -28,7 +33,10 @@ const SERVICES_COLLECTION = "Services";
 export class BookingService {
   constructor(
     private readonly appointmentService: AppointmentService = new AppointmentService(),
-    private readonly reviewService: ReviewService = new ReviewService()
+    private readonly reviewService: ReviewService = new ReviewService(),
+    private readonly appointmentStatusTaskScheduler?: AppointmentStatusTaskScheduler,
+    private readonly whatsAppService?: WhatsAppService,
+    private readonly userService: UserService = new UserService()
   ) {}
 
   async getAllBookings(
@@ -72,6 +80,7 @@ export class BookingService {
   async createBooking(dto: CreateBookingDto): Promise<Booking> {
     let createdBookingId: string | null = null;
     const createdAppointmentIds: string[] = [];
+    const createdAppointments: Appointment[] = [];
 
     try {
       if (dto.appointments.length === 0) {
@@ -143,6 +152,7 @@ export class BookingService {
             employeeId: appointmentInput.employeeId,
           });
         createdAppointmentIds.push(createdAppointment.id);
+        createdAppointments.push(createdAppointment);
       }
 
       await FirestoreService.update(BOOKINGS_COLLECTION, createdBooking.id, {
@@ -150,7 +160,23 @@ export class BookingService {
         updatedAt: FirestoreDataBase.generateTimeStamp(),
       });
 
-      return await this.getBookingById(createdBooking.id);
+      await this.scheduleStatusTasksForCreatedBookingAppointments(createdAppointments);
+
+      await this.sendBookingCreatedWhatsApp(dto.clientId).catch((whatsAppError) => {
+        const detail =
+          whatsAppError instanceof Error
+            ? whatsAppError.message
+            : typeof whatsAppError === "string"
+              ? whatsAppError
+              : JSON.stringify(whatsAppError);
+
+        logger.warn(
+          `[BookingService] No se pudo enviar WhatsApp de confirmación para booking ${createdBooking.id}. detalle=${detail}`
+        );
+      });
+
+      const createdBookingDoc = await this.getBookingById(createdBooking.id);
+      return createdBookingDoc;
     } catch (error) {
       await this.compensateFailedCreation(createdBookingId, createdAppointmentIds);
       if (error instanceof CustomError) throw error;
@@ -161,8 +187,27 @@ export class BookingService {
   async updateBooking(id: string, dto: UpdateBookingDto): Promise<Booking> {
     try {
       const existingBooking = await this.getBookingById(id);
-      if (existingBooking.status === "DELETED") {
-        throw CustomError.badRequest("No se puede editar un booking eliminado");
+      const hasBookingEditChanges =
+        dto.branchId !== undefined ||
+        dto.clientId !== undefined ||
+        dto.clientDocumentTypeId !== undefined ||
+        dto.clientDocumentTypeName !== undefined ||
+        dto.clientName !== undefined ||
+        dto.clientPhone !== undefined ||
+        dto.clientEmail !== undefined ||
+        dto.paymentMethod !== undefined ||
+        dto.paidAmount !== undefined ||
+        dto.operations !== undefined;
+
+      if (
+        hasBookingEditChanges &&
+        (existingBooking.status === "DELETED" ||
+          existingBooking.status === "CANCELLED" ||
+          existingBooking.status === "FINISHED")
+      ) {
+        throw CustomError.badRequest(
+          "No se puede editar un booking con estado FINISHED, DELETED o CANCELLED"
+        );
       }
 
       const nextBranchId = dto.branchId ?? existingBooking.branchId;
@@ -296,7 +341,16 @@ export class BookingService {
         payload.paymentMethod = dto.paymentMethod;
       }
 
-      if (dto.status !== undefined) {
+      if (hasBookingEditChanges) {
+        payload.status = "CREATED";
+        payload.cancelledAt = FieldValue.delete();
+        payload.deletedAt = FieldValue.delete();
+      } else if (dto.status !== undefined) {
+        await this.ensureBookingStatusTransitionAllowed(
+          existingBooking.status,
+          dto.status,
+          normalizedAppointmentIds
+        );
         if (dto.status === "DELETED") {
           await this.reviewService.deleteReviewsByAppointmentIds(
             normalizedAppointmentIds
@@ -336,6 +390,53 @@ export class BookingService {
       if (error instanceof CustomError) throw error;
       throw CustomError.internalServerError("Error interno del servidor");
     }
+  }
+
+  private async sendBookingCreatedWhatsApp(clientDocument: string): Promise<void> {
+    if (this.whatsAppService == null) return;
+
+    const sanitizedDocument = clientDocument.trim();
+    if (sanitizedDocument === "") return;
+
+    const user = await this.userService.getByDocument(sanitizedDocument);
+    const phone = user?.phone?.trim() ?? "";
+    if (phone === "") return;
+
+    await this.whatsAppService.sendTemplateMessage({
+      to: phone,
+      templateType: "APPOINTMENT_CONFIRMATION",
+    });
+  }
+
+  private async scheduleStatusTasksForCreatedBookingAppointments(
+    appointments: Appointment[]
+  ): Promise<void> {
+    const scheduler = this.appointmentStatusTaskScheduler;
+    if (scheduler == null || appointments.length === 0) return;
+
+    await Promise.all(
+      appointments.map((appointment) =>
+        scheduler
+          .scheduleAppointmentStatusTasks({
+            appointmentId: appointment.id,
+            date: appointment.date,
+            startTime: appointment.startTime,
+            endTime: appointment.endTime,
+          })
+          .catch((taskError) => {
+            const detail =
+              taskError instanceof Error
+                ? taskError.message
+                : typeof taskError === "string"
+                  ? taskError
+                  : JSON.stringify(taskError);
+
+            logger.warn(
+              `[BookingService] No se pudieron crear tasks automáticas para appointment ${appointment.id}. detalle=${detail}`
+            );
+          })
+      )
+    );
   }
 
   private async compensateFailedCreation(
@@ -525,27 +626,78 @@ export class BookingService {
         if (appointment.status === "DELETED") {
           return;
         }
+        if (
+          appointment.status === "FINISHED" &&
+          status !== "DELETED" &&
+          status !== "FINISHED"
+        ) {
+          throw CustomError.badRequest(
+            `No se puede cambiar el estado de la cita ${appointmentId} porque está finalizada`
+          );
+        }
+        if (
+          status === "CREATED" &&
+          appointment.status !== "CREATED" &&
+          appointment.status !== "CANCELLED"
+        ) {
+          throw CustomError.badRequest(
+            `Solo se puede marcar en CREATED la cita ${appointmentId} si está CANCELLED`
+          );
+        }
+
+        if (status === "CANCELLED") {
+          await this.appointmentService.cancelAppointment(appointmentId);
+          return;
+        }
+
+        if (status === "DELETED") {
+          await this.appointmentService.deleteAppointment(appointmentId);
+          return;
+        }
 
         const timestamp = FirestoreDataBase.generateTimeStamp();
         const payload: Record<string, unknown> = {
           status,
           updatedAt: timestamp,
         };
-
-        if (status === "CANCELLED") {
-          payload.cancelledAt = timestamp;
-          payload.deletedAt = FieldValue.delete();
-        } else if (status === "DELETED") {
-          payload.deletedAt = timestamp;
-          payload.cancelledAt = FieldValue.delete();
-        } else {
-          payload.cancelledAt = FieldValue.delete();
-          payload.deletedAt = FieldValue.delete();
-        }
+        payload.cancelledAt = FieldValue.delete();
+        payload.deletedAt = FieldValue.delete();
 
         await FirestoreService.update(APPOINTMENTS_COLLECTION, appointmentId, payload);
       })
     );
+  }
+
+  private async ensureBookingStatusTransitionAllowed(
+    currentStatus: BookingStatus,
+    nextStatus: BookingStatus,
+    appointmentIds: string[]
+  ): Promise<void> {
+    if (nextStatus === "DELETED") {
+      return;
+    }
+
+    if (nextStatus === "CREATED" && currentStatus === "FINISHED") {
+      throw CustomError.badRequest(
+        "No se puede marcar en CREATED un agendamiento finalizado"
+      );
+    }
+
+    if (nextStatus === "CANCELLED") {
+      const appointments = await Promise.all(
+        appointmentIds.map((appointmentId) =>
+          this.appointmentService.getAppointmentById(appointmentId)
+        )
+      );
+      const hasFinishedAppointment = appointments.some(
+        (appointment) => appointment.status === "FINISHED"
+      );
+      if (hasFinishedAppointment) {
+        throw CustomError.badRequest(
+          "No se puede marcar en CANCELLED un agendamiento con citas finalizadas"
+        );
+      }
+    }
   }
 
   private async getBookingById(id: string): Promise<Booking> {

@@ -1,5 +1,6 @@
 export type AppointmentStatus =
   | "CREATED"
+  | "IN_PROGRESS"
   | "CANCELLED"
   | "FINISHED"
   | "DELETED";

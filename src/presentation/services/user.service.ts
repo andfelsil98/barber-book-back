@@ -8,6 +8,7 @@ import type {
 } from "../../domain/interfaces/pagination.interface";
 import { MAX_PAGE_SIZE } from "../../domain/interfaces/pagination.interface";
 import type { User } from "../../domain/interfaces/user.interface";
+import { ensureColombiaCountryCode } from "../../domain/utils/string.utils";
 import { logger } from "../../infrastructure/logger/logger";
 import FirestoreService from "./firestore.service";
 
@@ -49,7 +50,7 @@ export class UserService {
   async createUser(data: CreateUserData): Promise<User> {
     try {
       const doc = {
-        phone: data.phone,
+        phone: ensureColombiaCountryCode(data.phone),
         name: data.name,
         email: data.email,
         document: data.document,
@@ -157,7 +158,7 @@ export class UserService {
 
       const payload = {
         ...(data.profilePhotoUrl !== undefined && { profilePhotoUrl: data.profilePhotoUrl }),
-        ...(data.phone !== undefined && { phone: data.phone }),
+        ...((data.phone !== undefined) && { phone: ensureColombiaCountryCode(data.phone) }),
         ...(data.name !== undefined && { name: data.name }),
         ...(nextEmail !== undefined && { email: nextEmail }),
         updatedAt: FirestoreDataBase.generateTimeStamp(),

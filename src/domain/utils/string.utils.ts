@@ -58,3 +58,13 @@ export function slugFromName(name: string): string {
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9-]/g, "");
 }
+
+/**
+ * Normaliza teléfono a dígitos y garantiza prefijo país 57 (Colombia).
+ * Si ya inicia en 57, lo mantiene.
+ */
+export function ensureColombiaCountryCode(phone: string): string {
+  const digitsOnly = phone.replace(/\D+/g, "");
+  if (digitsOnly === "") return "";
+  return digitsOnly.startsWith("57") ? digitsOnly : `57${digitsOnly}`;
+}

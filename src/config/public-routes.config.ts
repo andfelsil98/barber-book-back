@@ -32,4 +32,5 @@ export const PUBLIC_ROUTE_METHOD_PATHS: Array<{
   { method: "POST", path: "/api/reviews" },
   { method: "POST", path: "/api/bookings" },
   { method: "PUT", path: "/api/bookings", match: "prefix" },
+  { method: "POST", path: "/api/whatsapp/send-message", match: "prefix" },
 ];

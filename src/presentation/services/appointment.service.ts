@@ -19,7 +19,11 @@ import { MAX_PAGE_SIZE, buildPagination } from "../../domain/interfaces/paginati
 import type { CreateAppointmentDto } from "../appointment/dtos/create-appointment.dto";
 import type { UpdateAppointmentDto } from "../appointment/dtos/update-appointment.dto";
 import FirestoreService from "./firestore.service";
+import { ensureColombiaCountryCode } from "../../domain/utils/string.utils";
 import { ReviewService } from "./review.service";
+import type { AppointmentStatusTaskScheduler } from "./appointment-status-task-scheduler.service";
+import { logger } from "../../infrastructure/logger/logger";
+import { MetricService } from "./metric.service";
 
 const COLLECTION_NAME = "Appointments";
 const BOOKINGS_COLLECTION = "Bookings";
@@ -43,6 +47,15 @@ interface ClientData {
   name?: string;
   phone?: string;
   email?: string;
+}
+
+interface AppointmentMetricContext {
+  businessId: string;
+  branchId: string;
+  employeeId: string;
+  date: string;
+  status: AppointmentStatus;
+  servicePrice: number;
 }
 
 export interface CreateAppointmentForBookingData {
@@ -81,7 +94,9 @@ export interface UpdateAppointmentOptions {
 
 export class AppointmentService {
   constructor(
-    private readonly reviewService: ReviewService = new ReviewService()
+    private readonly reviewService: ReviewService = new ReviewService(),
+    private readonly appointmentStatusTaskScheduler?: AppointmentStatusTaskScheduler,
+    private readonly metricService: MetricService = new MetricService()
   ) {}
 
   async getAllAppointments(
@@ -111,7 +126,7 @@ export class AppointmentService {
               {
                 field: "status" as const,
                 operator: "in" as const,
-                value: ["CREATED", "CANCELLED", "FINISHED"],
+                value: ["CREATED", "IN_PROGRESS", "CANCELLED", "FINISHED"],
               },
             ]),
         ...(params.id != null && params.id.trim() !== ""
@@ -346,10 +361,22 @@ export class AppointmentService {
         employeeId: dto.employeeId,
       });
       createdAppointmentId = createdAppointment.id;
-
       await FirestoreService.update(BOOKINGS_COLLECTION, createdBooking.id, {
         appointments: [createdAppointment.id],
         updatedAt: FirestoreDataBase.generateTimeStamp(),
+      });
+
+      await this.scheduleStatusTasksForCreatedAppointment(createdAppointment).catch((taskError) => {
+        const detail =
+          taskError instanceof Error
+            ? taskError.message
+            : typeof taskError === "string"
+              ? taskError
+              : JSON.stringify(taskError);
+
+        logger.warn(
+          `[AppointmentService] No se pudieron crear tasks automáticas para appointment ${createdAppointment.id}. detalle=${detail}`
+        );
       });
 
       return createdAppointment;
@@ -397,7 +424,10 @@ export class AppointmentService {
         booking.businessId,
         booking.branchId
       );
-      await this.ensureServiceExistsInBusiness(data.serviceId, booking.businessId);
+      const service = await this.ensureServiceExistsInBusiness(
+        data.serviceId,
+        booking.businessId
+      );
       this.ensureTimeRangeWithinBranchSchedule(
         branch,
         data.startTime,
@@ -433,7 +463,20 @@ export class AppointmentService {
         createdAt: FirestoreDataBase.generateTimeStamp(),
       });
 
-      return this.mapAppointmentToResponse(created as unknown as AppointmentStored);
+      const createdAppointment = this.mapAppointmentToResponse(
+        created as unknown as AppointmentStored
+      );
+
+      await this.applyAppointmentMetricTransition(null, {
+        businessId: booking.businessId,
+        branchId: booking.branchId,
+        employeeId: data.employeeId,
+        date: data.date,
+        status: "CREATED",
+        servicePrice: service.price,
+      });
+
+      return createdAppointment;
     } catch (error) {
       if (error instanceof CustomError) throw error;
       throw CustomError.internalServerError("Error interno del servidor");
@@ -454,8 +497,14 @@ export class AppointmentService {
       this.ensureAppointmentDateTimeIsNotPast(dto.date, dto.startTime);
 
       const existingAppointment = await this.getStoredAppointmentById(id);
-      if (existingAppointment.status === "DELETED") {
-        throw CustomError.badRequest("No se puede editar una cita eliminada");
+      if (
+        existingAppointment.status === "DELETED" ||
+        existingAppointment.status === "CANCELLED" ||
+        existingAppointment.status === "FINISHED"
+      ) {
+        throw CustomError.badRequest(
+          "No se puede editar una cita con estado FINISHED, DELETED o CANCELLED"
+        );
       }
 
       const bookingId = existingAppointment.bookingId?.trim() ?? "";
@@ -478,7 +527,10 @@ export class AppointmentService {
         booking.businessId,
         branchIdForValidation
       );
-      await this.ensureServiceExistsInBusiness(dto.serviceId, booking.businessId);
+      const nextService = await this.ensureServiceExistsInBusiness(
+        dto.serviceId,
+        booking.businessId
+      );
       this.ensureTimeRangeWithinBranchSchedule(
         branch,
         dto.startTime,
@@ -493,27 +545,46 @@ export class AppointmentService {
         id
       );
 
+      const previousServicePrice = await this.getServicePriceById(
+        existingAppointment.serviceId ?? dto.serviceId,
+        booking.businessId
+      );
+
+      const beforeMetricContext = {
+        businessId: booking.businessId,
+        branchId: booking.branchId,
+        employeeId: existingAppointment.employeeId ?? dto.employeeId,
+        date: this.normalizeStoredDate(existingAppointment.date, dto.date),
+        status: existingAppointment.status,
+        servicePrice: previousServicePrice,
+      };
+
       const payload: Record<string, unknown> = {
         date: dto.date,
         startTime: dto.startTime,
         endTime: dto.endTime,
         serviceId: dto.serviceId,
         employeeId: dto.employeeId,
+        status: "CREATED",
         // Limpia payload legacy cuando se actualiza por el nuevo esquema.
         services: FieldValue.delete(),
         updatedAt: FirestoreDataBase.generateTimeStamp(),
+        cancelledAt: FieldValue.delete(),
+        deletedAt: FieldValue.delete(),
       };
-      if (dto.status !== undefined) {
-        payload.status = dto.status;
-        if (dto.status === "CANCELLED") {
-          payload.cancelledAt = FirestoreDataBase.generateTimeStamp();
-        } else if (existingAppointment.status === "CANCELLED") {
-          payload.cancelledAt = FieldValue.delete();
-        }
-      }
 
       await FirestoreService.update(COLLECTION_NAME, id, payload);
       await this.syncBookingStatusFromAppointments(booking.id);
+
+      await this.applyAppointmentMetricTransition(beforeMetricContext, {
+        businessId: booking.businessId,
+        branchId: branchIdForValidation,
+        employeeId: dto.employeeId,
+        date: dto.date,
+        status: "CREATED",
+        servicePrice: nextService.price,
+      });
+
       const updated = await FirestoreService.getById<AppointmentStored>(
         COLLECTION_NAME,
         id
@@ -531,19 +602,52 @@ export class AppointmentService {
       if (existingAppointment.status === "DELETED") {
         throw CustomError.badRequest("No se puede cancelar una cita eliminada");
       }
+      if (existingAppointment.status === "FINISHED") {
+        throw CustomError.badRequest(
+          "No se puede cambiar el estado de una cita finalizada"
+        );
+      }
       if (existingAppointment.status === "CANCELLED") {
         return this.mapAppointmentToResponse(existingAppointment);
       }
+
+      const bookingId = existingAppointment.bookingId?.trim() ?? "";
+      if (bookingId === "") {
+        throw CustomError.badRequest("La cita no está vinculada a un booking");
+      }
+
+      const booking = await FirestoreService.getById<Booking>(BOOKINGS_COLLECTION, bookingId);
+      const beforeServicePrice = await this.getServicePriceById(
+        existingAppointment.serviceId ?? "",
+        booking.businessId
+      );
 
       await FirestoreService.update(COLLECTION_NAME, id, {
         status: "CANCELLED",
         cancelledAt: FirestoreDataBase.generateTimeStamp(),
         updatedAt: FirestoreDataBase.generateTimeStamp(),
       });
-      const bookingId = existingAppointment.bookingId?.trim() ?? "";
-      if (bookingId !== "") {
-        await this.syncBookingStatusFromAppointments(bookingId);
-      }
+
+      await this.syncBookingStatusFromAppointments(bookingId);
+
+      await this.applyAppointmentMetricTransition(
+        {
+          businessId: booking.businessId,
+          branchId: booking.branchId,
+          employeeId: existingAppointment.employeeId ?? "",
+          date: this.normalizeStoredDate(existingAppointment.date),
+          status: existingAppointment.status,
+          servicePrice: beforeServicePrice,
+        },
+        {
+          businessId: booking.businessId,
+          branchId: booking.branchId,
+          employeeId: existingAppointment.employeeId ?? "",
+          date: this.normalizeStoredDate(existingAppointment.date),
+          status: "CANCELLED",
+          servicePrice: beforeServicePrice,
+        }
+      );
 
       const cancelled = await this.getStoredAppointmentById(id);
       return this.mapAppointmentToResponse(cancelled);
@@ -560,16 +664,37 @@ export class AppointmentService {
         throw CustomError.badRequest("La cita ya se encuentra eliminada");
       }
 
+      const bookingId = existingAppointment.bookingId?.trim() ?? "";
+      if (bookingId === "") {
+        throw CustomError.badRequest("La cita no está vinculada a un booking");
+      }
+
+      const booking = await FirestoreService.getById<Booking>(BOOKINGS_COLLECTION, bookingId);
+      const beforeServicePrice = await this.getServicePriceById(
+        existingAppointment.serviceId ?? "",
+        booking.businessId
+      );
+
       await this.reviewService.deleteReviewsByAppointmentId(id);
 
       await FirestoreService.update(COLLECTION_NAME, id, {
         status: "DELETED",
         deletedAt: FirestoreDataBase.generateTimeStamp(),
       });
-      const bookingId = existingAppointment.bookingId?.trim() ?? "";
-      if (bookingId !== "") {
-        await this.syncBookingStatusFromAppointments(bookingId);
-      }
+
+      await this.syncBookingStatusFromAppointments(bookingId);
+
+      await this.applyAppointmentMetricTransition(
+        {
+          businessId: booking.businessId,
+          branchId: booking.branchId,
+          employeeId: existingAppointment.employeeId ?? "",
+          date: this.normalizeStoredDate(existingAppointment.date),
+          status: existingAppointment.status,
+          servicePrice: beforeServicePrice,
+        },
+        null
+      );
 
       const deleted = await FirestoreService.getById<AppointmentStored>(
         COLLECTION_NAME,
@@ -580,6 +705,228 @@ export class AppointmentService {
       if (error instanceof CustomError) throw error;
       throw CustomError.internalServerError("Error interno del servidor");
     }
+  }
+
+  async markAppointmentInProgressIfDue(
+    id: string
+  ): Promise<{ appointment: Appointment; changed: boolean }> {
+    const existing = await this.getStoredAppointmentById(id);
+    const mapped = this.mapAppointmentToResponse(existing);
+
+    if (mapped.status !== "CREATED") {
+      return { appointment: mapped, changed: false };
+    }
+    await FirestoreService.update(COLLECTION_NAME, mapped.id, {
+      status: "IN_PROGRESS",
+      updatedAt: FirestoreDataBase.generateTimeStamp(),
+      cancelledAt: FieldValue.delete(),
+      deletedAt: FieldValue.delete(),
+    });
+
+    const updated = await this.getStoredAppointmentById(mapped.id);
+    return {
+      appointment: this.mapAppointmentToResponse(updated),
+      changed: true,
+    };
+  }
+
+  async markAppointmentFinishedIfDue(
+    id: string
+  ): Promise<{ appointment: Appointment; changed: boolean }> {
+    const existing = await this.getStoredAppointmentById(id);
+    const mapped = this.mapAppointmentToResponse(existing);
+
+    if (mapped.status !== "IN_PROGRESS") {
+      return { appointment: mapped, changed: false };
+    }
+
+    const bookingId = mapped.bookingId.trim();
+    if (bookingId === "") {
+      throw CustomError.badRequest("La cita no está vinculada a un booking");
+    }
+
+    const booking = await FirestoreService.getById<Booking>(BOOKINGS_COLLECTION, bookingId);
+    const servicePrice = await this.getServicePriceById(mapped.serviceId, booking.businessId);
+
+    await FirestoreService.update(COLLECTION_NAME, mapped.id, {
+      status: "FINISHED",
+      updatedAt: FirestoreDataBase.generateTimeStamp(),
+      cancelledAt: FieldValue.delete(),
+      deletedAt: FieldValue.delete(),
+    });
+
+    await this.syncBookingStatusFromAppointments(bookingId);
+
+    await this.applyAppointmentMetricTransition(
+      {
+        businessId: booking.businessId,
+        branchId: booking.branchId,
+        employeeId: mapped.employeeId,
+        date: mapped.date,
+        status: "IN_PROGRESS",
+        servicePrice,
+      },
+      {
+        businessId: booking.businessId,
+        branchId: booking.branchId,
+        employeeId: mapped.employeeId,
+        date: mapped.date,
+        status: "FINISHED",
+        servicePrice,
+      }
+    );
+
+    const updated = await this.getStoredAppointmentById(mapped.id);
+    return {
+      appointment: this.mapAppointmentToResponse(updated),
+      changed: true,
+    };
+  }
+  private async applyAppointmentMetricTransition(
+    before: AppointmentMetricContext | null,
+    after: AppointmentMetricContext | null
+  ): Promise<void> {
+    const beforeContribution =
+      before == null ? null : this.resolveMetricContribution(before.status, before.servicePrice);
+    const afterContribution =
+      after == null ? null : this.resolveMetricContribution(after.status, after.servicePrice);
+
+    if (before != null && beforeContribution != null) {
+      const delta = this.negateContribution(beforeContribution);
+      await this.applyMetricDeltaIfNeeded(before, delta);
+    }
+
+    if (after != null && afterContribution != null) {
+      await this.applyMetricDeltaIfNeeded(after, afterContribution);
+    }
+  }
+
+  private async applyMetricDeltaIfNeeded(
+    context: AppointmentMetricContext,
+    delta: {
+      revenueDelta: number;
+      appointmentsDelta: number;
+      completedAppointmentsDelta: number;
+      cancelledAppointmentsDelta: number;
+    }
+  ): Promise<void> {
+    if (
+      delta.revenueDelta === 0 &&
+      delta.appointmentsDelta === 0 &&
+      delta.completedAppointmentsDelta === 0 &&
+      delta.cancelledAppointmentsDelta === 0
+    ) {
+      return;
+    }
+
+    if (
+      context.businessId.trim() === "" ||
+      context.branchId.trim() === "" ||
+      context.employeeId.trim() === "" ||
+      context.date.trim() === ""
+    ) {
+      return;
+    }
+
+    await this.metricService.applyAppointmentMetricDelta({
+      businessId: context.businessId,
+      branchId: context.branchId,
+      employeeId: context.employeeId,
+      date: context.date,
+      revenueDelta: delta.revenueDelta,
+      appointmentsDelta: delta.appointmentsDelta,
+      completedAppointmentsDelta: delta.completedAppointmentsDelta,
+      cancelledAppointmentsDelta: delta.cancelledAppointmentsDelta,
+    });
+  }
+
+  private resolveMetricContribution(
+    status: AppointmentStatus,
+    servicePrice: number
+  ): {
+    revenueDelta: number;
+    appointmentsDelta: number;
+    completedAppointmentsDelta: number;
+    cancelledAppointmentsDelta: number;
+  } {
+    if (status === "DELETED") {
+      return {
+        revenueDelta: 0,
+        appointmentsDelta: 0,
+        completedAppointmentsDelta: 0,
+        cancelledAppointmentsDelta: 0,
+      };
+    }
+
+    const isRevenueStatus =
+      status === "CREATED" || status === "IN_PROGRESS" || status === "FINISHED";
+
+    return {
+      revenueDelta: isRevenueStatus ? Math.max(0, servicePrice) : 0,
+      appointmentsDelta: 1,
+      completedAppointmentsDelta: status === "FINISHED" ? 1 : 0,
+      cancelledAppointmentsDelta: status === "CANCELLED" ? 1 : 0,
+    };
+  }
+
+  private negateContribution(contribution: {
+    revenueDelta: number;
+    appointmentsDelta: number;
+    completedAppointmentsDelta: number;
+    cancelledAppointmentsDelta: number;
+  }): {
+    revenueDelta: number;
+    appointmentsDelta: number;
+    completedAppointmentsDelta: number;
+    cancelledAppointmentsDelta: number;
+  } {
+    return {
+      revenueDelta: -contribution.revenueDelta,
+      appointmentsDelta: -contribution.appointmentsDelta,
+      completedAppointmentsDelta: -contribution.completedAppointmentsDelta,
+      cancelledAppointmentsDelta: -contribution.cancelledAppointmentsDelta,
+    };
+  }
+
+  private normalizeStoredDate(dateValue: Timestamp | string, fallback?: string): string {
+    if (typeof dateValue === "string" && dateValue.trim() !== "") {
+      return dateValue.trim();
+    }
+
+    if (dateValue instanceof Timestamp) {
+      return dateValue.toDate().toISOString().slice(0, 10);
+    }
+
+    return fallback ?? "";
+  }
+
+  private async getServicePriceById(serviceId: string, businessId: string): Promise<number> {
+    const normalizedServiceId = serviceId.trim();
+    if (normalizedServiceId === "") return 0;
+
+    const services = await FirestoreService.getAll<Service>(SERVICES_COLLECTION, [
+      { field: "id", operator: "==", value: normalizedServiceId },
+      { field: "businessId", operator: "==", value: businessId },
+    ]);
+
+    if (services.length === 0) {
+      throw CustomError.notFound("No existe un servicio con este id");
+    }
+
+    return services[0]!.price ?? 0;
+  }
+
+  private async scheduleStatusTasksForCreatedAppointment(
+    appointment: Appointment
+  ): Promise<void> {
+    if (this.appointmentStatusTaskScheduler == null) return;
+
+    await this.appointmentStatusTaskScheduler.scheduleAppointmentStatusTasks({
+      appointmentId: appointment.id,
+      date: appointment.date,
+      startTime: appointment.startTime,
+      endTime: appointment.endTime,
+    });
   }
 
   private async getStoredAppointmentById(id: string): Promise<AppointmentStored> {
@@ -856,7 +1203,7 @@ export class AppointmentService {
         {
           field: "status",
           operator: "in",
-          value: ["CREATED", "FINISHED"],
+          value: ["CREATED", "IN_PROGRESS", "FINISHED"],
         },
       ]
     );
@@ -991,7 +1338,7 @@ export class AppointmentService {
       profilePhotoUrl: string;
       createdAt: ReturnType<typeof FirestoreDataBase.generateTimeStamp>;
     }>(USERS_COLLECTION, {
-      phone: clientData.phone.trim(),
+      phone: ensureColombiaCountryCode(clientData.phone.trim()),
       name: clientData.name.trim(),
       email: clientData.email?.trim() ?? "",
       isAuthActive: false,
