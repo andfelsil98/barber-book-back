@@ -6,7 +6,8 @@ export interface CreateServiceItemDto {
   name: string;
   duration: number;
   price: number;
-  description?: string;
+  description: string;
+  imageUrl?: string;
 }
 
 /** Body: businessId en la raíz + array services. */
@@ -39,17 +40,26 @@ export function validateCreateServiceItemDto(item: unknown): CreateServiceItemDt
   }
 
   const descriptionRaw = b.description;
-  if (descriptionRaw !== undefined && typeof descriptionRaw !== "string") {
-    throw CustomError.badRequest("description debe ser un texto cuando se proporcione");
+  if (typeof descriptionRaw !== "string" || descriptionRaw.trim() === "") {
+    throw CustomError.badRequest("description es requerido y debe ser un texto no vacío");
   }
-  const description =
-    descriptionRaw !== undefined ? normalizeSpaces(String(descriptionRaw)) : undefined;
+  const description = normalizeSpaces(String(descriptionRaw));
+
+  const imageUrlRaw = b.imageUrl;
+  let imageUrl: string | undefined;
+  if (imageUrlRaw !== undefined) {
+    if (typeof imageUrlRaw !== "string") {
+      throw CustomError.badRequest("imageUrl debe ser un texto cuando se proporcione");
+    }
+    imageUrl = imageUrlRaw.trim();
+  }
 
   return {
     name,
     duration,
     price,
-    ...(description !== undefined && description !== "" && { description }),
+    description,
+    ...(imageUrl !== undefined && { imageUrl }),
   };
 }
 

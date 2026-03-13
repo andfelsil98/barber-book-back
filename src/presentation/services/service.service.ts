@@ -80,6 +80,7 @@ export class ServiceService {
           duration: item.duration,
           price: item.price,
           description: item.description ?? "",
+          ...(item.imageUrl !== undefined && { imageUrl: item.imageUrl }),
           status: "ACTIVE" as const,
           createdAt: FirestoreDataBase.generateTimeStamp(),
         };
@@ -118,6 +119,7 @@ export class ServiceService {
       if (dto.duration !== undefined) payload.duration = dto.duration;
       if (dto.price !== undefined) payload.price = dto.price;
       if (dto.description !== undefined) payload.description = dto.description;
+      if (dto.imageUrl !== undefined) payload.imageUrl = dto.imageUrl;
       if (dto.status !== undefined) payload.status = dto.status;
 
       await FirestoreService.update(COLLECTION_NAME, id, payload);

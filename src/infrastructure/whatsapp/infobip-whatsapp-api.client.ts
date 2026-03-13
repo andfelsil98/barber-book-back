@@ -43,6 +43,20 @@ interface InfobipSendResponse {
   [key: string]: unknown;
 }
 
+interface InfobipTemplateMessageRequest {
+  from: string;
+  to: string;
+  content: {
+    templateName: string;
+    language: string;
+    templateData?: {
+      body: {
+        placeholders: string[];
+      };
+    };
+  };
+}
+
 export class InfobipWhatsAppApiClient implements WhatsAppMessageProvider {
   constructor(private readonly config: InfobipWhatsAppApiConfig) {}
 
@@ -54,6 +68,24 @@ export class InfobipWhatsAppApiClient implements WhatsAppMessageProvider {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
 
+    const messageRequest: InfobipTemplateMessageRequest = {
+      from: this.config.sender.trim(),
+      to: payload.to,
+      content: {
+        templateName: payload.templateName,
+        language: payload.language,
+        templateData: {
+          body: {
+            placeholders: payload.placeholders ?? [],
+          },
+        },
+      },
+    };
+
+    const requestBody = {
+      messages: [messageRequest],
+    };
+
     try {
       const response = await fetch(this.buildTemplateSendUrl(), {
         method: "POST",
@@ -61,25 +93,7 @@ export class InfobipWhatsAppApiClient implements WhatsAppMessageProvider {
           "Content-Type": "application/json",
           Authorization: this.buildAuthorizationHeader(),
         },
-        body: JSON.stringify({
-          messages: [
-            {
-              from: this.config.sender.trim(),
-              to: payload.to,
-              content: {
-                templateName: payload.templateName,
-                language: payload.language,
-                ...(payload.placeholders != null && payload.placeholders.length > 0 && {
-                  templateData: {
-                    body: {
-                      placeholders: payload.placeholders,
-                    },
-                  },
-                }),
-              },
-            },
-          ],
-        }),
+        body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
 
@@ -89,7 +103,7 @@ export class InfobipWhatsAppApiClient implements WhatsAppMessageProvider {
         throw CustomError.internalServerError(
           `Infobip rechazó el envío. status=${response.status}. detalle=${this.extractProviderError(
             responseBody
-          )}`
+          )}. request=${this.buildRequestContext(messageRequest)}. body=${JSON.stringify(responseBody)}`
         );
       }
 
@@ -101,7 +115,9 @@ export class InfobipWhatsAppApiClient implements WhatsAppMessageProvider {
 
       if (messageId === "") {
         throw CustomError.internalServerError(
-          `Infobip respondió sin messageId. body=${JSON.stringify(responseBody)}`
+          `Infobip respondió sin messageId. request=${this.buildRequestContext(
+            messageRequest
+          )}. body=${JSON.stringify(responseBody)}`
         );
       }
 
@@ -110,7 +126,7 @@ export class InfobipWhatsAppApiClient implements WhatsAppMessageProvider {
         throw CustomError.internalServerError(
           `Infobip devolvió un estado de rechazo. detalle=${this.extractProviderError(
             responseBody
-          )}`
+          )}. request=${this.buildRequestContext(messageRequest)}. body=${JSON.stringify(responseBody)}`
         );
       }
 
@@ -200,6 +216,19 @@ export class InfobipWhatsAppApiClient implements WhatsAppMessageProvider {
     }
 
     return JSON.stringify(body);
+  }
+
+  private buildRequestContext(message: InfobipTemplateMessageRequest): string {
+    const placeholders = message.content.templateData?.body.placeholders ?? [];
+
+    return JSON.stringify({
+      to: message.to,
+      from: message.from,
+      templateName: message.content.templateName,
+      language: message.content.language,
+      placeholdersCount: placeholders.length,
+      hasTemplateData: message.content.templateData != null,
+    });
   }
 
   private ensureConfigured(): void {

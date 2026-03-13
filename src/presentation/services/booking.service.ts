@@ -376,6 +376,30 @@ export class BookingService {
       }
 
       await FirestoreService.update(BOOKINGS_COLLECTION, id, payload);
+
+      if (
+        !hasBookingEditChanges &&
+        dto.status !== undefined &&
+        (dto.status === "CANCELLED" || dto.status === "DELETED") &&
+        existingBooking.status !== dto.status &&
+        existingBooking.status !== "FINISHED"
+      ) {
+        await this.sendBookingStatusChangedWhatsApp(
+          existingBooking.clientId
+        ).catch((whatsAppError) => {
+          const detail =
+            whatsAppError instanceof Error
+              ? whatsAppError.message
+              : typeof whatsAppError === "string"
+                ? whatsAppError
+                : JSON.stringify(whatsAppError);
+
+          logger.warn(
+            `[BookingService] No se pudo enviar WhatsApp de ${dto.status} para booking ${existingBooking.id}. detalle=${detail}`
+          );
+        });
+      }
+
       return await this.getBookingById(id);
     } catch (error) {
       if (error instanceof CustomError) throw error;
@@ -393,6 +417,24 @@ export class BookingService {
   }
 
   private async sendBookingCreatedWhatsApp(clientDocument: string): Promise<void> {
+    if (this.whatsAppService == null) return;
+
+    const sanitizedDocument = clientDocument.trim();
+    if (sanitizedDocument === "") return;
+
+    const user = await this.userService.getByDocument(sanitizedDocument);
+    const phone = user?.phone?.trim() ?? "";
+    if (phone === "") return;
+
+    await this.whatsAppService.sendTemplateMessage({
+      to: phone,
+      templateType: "APPOINTMENT_CONFIRMATION",
+    });
+  }
+
+  private async sendBookingStatusChangedWhatsApp(
+    clientDocument: string
+  ): Promise<void> {
     if (this.whatsAppService == null) return;
 
     const sanitizedDocument = clientDocument.trim();

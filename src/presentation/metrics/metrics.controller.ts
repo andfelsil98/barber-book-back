@@ -1,36 +1,19 @@
 import type { NextFunction, Request, Response } from "express";
-import {
-  DEFAULT_PAGE,
-  DEFAULT_PAGE_SIZE,
-  MAX_PAGE_SIZE,
-} from "../../domain/interfaces/pagination.interface";
-import { parseDateFilter, parseMetricType, parseMonthFilter } from "./dtos/get-all-metrics.dto";
+import { parseDateFilter, parseEntityType, parseMetricTimeFrame, parseMetricTypes, parseSameDate } from "./dtos/get-all-metrics.dto";
 import type { MetricService } from "../services/metric.service";
 
 export class MetricsController {
   constructor(private readonly metricService: MetricService) {}
 
-  public getAll = (req: Request, res: Response, next: NextFunction) => {
+  public getInsights = (req: Request, res: Response, next: NextFunction) => {
     try {
-      const pageRaw = req.query.page != null ? Number(req.query.page) : DEFAULT_PAGE;
-      const pageSizeRaw =
-        req.query.pageSize != null ? Number(req.query.pageSize) : DEFAULT_PAGE_SIZE;
+      const metricTypes = parseMetricTypes(req.query.metricTypes);
+      const entityType = parseEntityType(req.query.entityType);
+      const timeframe = parseMetricTimeFrame(req.query.timeframe);
+      const startDate = parseDateFilter(req.query.startDate, "startDate");
+      const endDate = parseDateFilter(req.query.endDate, "endDate");
+      const sameDate = parseSameDate(req.query.sameDate);
 
-      if (Number.isNaN(pageRaw) || pageRaw < 1) {
-        res.status(400).json({ message: "page debe ser un entero positivo" });
-        return;
-      }
-      if (Number.isNaN(pageSizeRaw) || pageSizeRaw < 1) {
-        res.status(400).json({ message: "pageSize debe ser un entero positivo" });
-        return;
-      }
-
-      const pageSize = Math.min(MAX_PAGE_SIZE, pageSizeRaw);
-      const id =
-        typeof req.query.id === "string" && req.query.id.trim() !== ""
-          ? req.query.id.trim()
-          : undefined;
-      const type = parseMetricType(req.query.type);
       const businessId =
         typeof req.query.businessId === "string" && req.query.businessId.trim() !== ""
           ? req.query.businessId.trim()
@@ -43,25 +26,18 @@ export class MetricsController {
         typeof req.query.employeeId === "string" && req.query.employeeId.trim() !== ""
           ? req.query.employeeId.trim()
           : undefined;
-      const date = parseDateFilter(req.query.date);
-      const month = parseMonthFilter(req.query.month);
-
-      if (date != null && month != null) {
-        res.status(400).json({ message: "No puedes enviar date y month al mismo tiempo" });
-        return;
-      }
 
       this.metricService
-        .getAllMetrics({
-          page: pageRaw,
-          pageSize,
-          ...(id != null && { id }),
-          ...(type != null && { type }),
+        .getMetricInsights({
+          metricTypes,
+          entityType,
           ...(businessId != null && { businessId }),
           ...(branchId != null && { branchId }),
           ...(employeeId != null && { employeeId }),
-          ...(date != null && { date }),
-          ...(month != null && { month }),
+          ...(timeframe != null && { timeframe }),
+          ...(startDate != null && { startDate }),
+          ...(endDate != null && { endDate }),
+          sameDate,
         })
         .then((result) => {
           res.status(200).json(result);

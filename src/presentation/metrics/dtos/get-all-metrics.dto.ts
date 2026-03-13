@@ -1,41 +1,111 @@
+import {
+  METRIC_TYPE_QUERY_ALIASES,
+  type MetricCalculationType,
+} from "../../../config/metric-types.config";
 import { CustomError } from "../../../domain/errors/custom-error";
-import type { MetricType } from "../../../domain/interfaces/metric.interface";
+import type {
+  MetricTimeFrame,
+  MetricType,
+} from "../../../domain/interfaces/metric.interface";
 
-export function parseMetricType(value: unknown): MetricType | undefined {
-  if (value == null) return undefined;
+export function parseEntityType(value: unknown): MetricType {
   if (typeof value !== "string") {
-    throw CustomError.badRequest("type debe ser BUSSINESS, BRANCH o EMPLOYEE");
+    throw CustomError.badRequest("entityType es requerido y debe ser BUSSINESS, BRANCH o EMPLOYEE");
   }
+
   const normalized = value.trim().toUpperCase();
-  if (normalized === "") return undefined;
   if (normalized !== "BUSSINESS" && normalized !== "BRANCH" && normalized !== "EMPLOYEE") {
-    throw CustomError.badRequest("type debe ser BUSSINESS, BRANCH o EMPLOYEE");
+    throw CustomError.badRequest("entityType debe ser BUSSINESS, BRANCH o EMPLOYEE");
   }
+
   return normalized as MetricType;
 }
 
-export function parseDateFilter(value: unknown): string | undefined {
+export function parseMetricTypes(value: unknown): MetricCalculationType[] {
+  if (value == null) {
+    throw CustomError.badRequest("metricTypes es requerido");
+  }
+
+  const rawValues = Array.isArray(value)
+    ? value
+        .filter((item): item is string => typeof item === "string")
+        .flatMap((item) => item.split(","))
+    : typeof value === "string"
+      ? value.split(",")
+      : [];
+
+  const normalizedTypes = rawValues
+    .map((item) => item.trim())
+    .filter((item) => item !== "")
+    .map((item) => {
+      const normalizedKey = item
+        .replace(/([a-z])([A-Z])/g, "$1_$2")
+        .replace(/\s+/g, "_")
+        .toLowerCase();
+
+      const fromAlias = METRIC_TYPE_QUERY_ALIASES[normalizedKey];
+      if (fromAlias != null) return fromAlias;
+
+      const upper = item.toUpperCase();
+      const direct = Object.values(METRIC_TYPE_QUERY_ALIASES).find(
+        (metricType) => metricType === upper
+      );
+      if (direct != null) return direct;
+
+      throw CustomError.badRequest(
+        "metricTypes contiene un valor inválido. Usa: REVENUE, APPOINTMENTS_COUNT, AVERAGE_TICKET, CANCELLATION_RATE, COMPLETION_RATE, EMPLOYEE_PRODUCTIVITY, BUSINESS_GROWTH"
+      );
+    });
+
+  if (normalizedTypes.length === 0) {
+    throw CustomError.badRequest("metricTypes debe incluir al menos una métrica");
+  }
+
+  return Array.from(new Set(normalizedTypes));
+}
+
+export function parseMetricTimeFrame(value: unknown): MetricTimeFrame | undefined {
   if (value == null) return undefined;
   if (typeof value !== "string") {
-    throw CustomError.badRequest("date debe tener formato YYYY-MM-DD");
+    throw CustomError.badRequest("timeframe debe ser DAILY o MONTHLY");
   }
+
+  const normalized = value.trim().toUpperCase();
+  if (normalized === "") return undefined;
+  if (normalized !== "DAILY" && normalized !== "MONTHLY") {
+    throw CustomError.badRequest("timeframe debe ser DAILY o MONTHLY");
+  }
+
+  return normalized as MetricTimeFrame;
+}
+
+export function parseDateFilter(value: unknown, fieldName: "startDate" | "endDate"): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") {
+    throw CustomError.badRequest(`${fieldName} debe tener formato YYYY-MM-DD`);
+  }
+
   const normalized = value.trim();
   if (normalized === "") return undefined;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
-    throw CustomError.badRequest("date debe tener formato YYYY-MM-DD");
+    throw CustomError.badRequest(`${fieldName} debe tener formato YYYY-MM-DD`);
   }
+
   return normalized;
 }
 
-export function parseMonthFilter(value: unknown): string | undefined {
-  if (value == null) return undefined;
+export function parseSameDate(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof value === "boolean") return value;
+
   if (typeof value !== "string") {
-    throw CustomError.badRequest("month debe tener formato YYYY-MM");
+    throw CustomError.badRequest("sameDate debe ser true o false");
   }
-  const normalized = value.trim();
-  if (normalized === "") return undefined;
-  if (!/^\d{4}-\d{2}$/.test(normalized)) {
-    throw CustomError.badRequest("month debe tener formato YYYY-MM");
-  }
-  return normalized;
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "") return false;
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+
+  throw CustomError.badRequest("sameDate debe ser true o false");
 }

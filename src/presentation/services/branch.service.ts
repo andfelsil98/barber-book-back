@@ -69,8 +69,11 @@ export class BranchService {
           businessId: dto.businessId,
           name: item.name,
           address: item.address,
-          openingTime: item.openingTime,
-          closingTime: item.closingTime,
+          location: item.location,
+          phone: item.phone,
+          phoneHasWhatsapp: item.phoneHasWhatsapp,
+          schedule: item.schedule,
+          imageGallery: item.imageGallery,
           status: "ACTIVE" as const,
           createdAt: FirestoreDataBase.generateTimeStamp(),
         };
@@ -108,8 +111,11 @@ export class BranchService {
       };
       if (dto.name !== undefined) payload.name = dto.name;
       if (dto.address !== undefined) payload.address = dto.address;
-      if (dto.openingTime !== undefined) payload.openingTime = dto.openingTime;
-      if (dto.closingTime !== undefined) payload.closingTime = dto.closingTime;
+      payload.location = dto.location;
+      payload.phone = dto.phone;
+      payload.phoneHasWhatsapp = dto.phoneHasWhatsapp;
+      payload.schedule = dto.schedule;
+      payload.imageGallery = dto.imageGallery;
       if (dto.status !== undefined) payload.status = dto.status;
 
       await FirestoreService.update(COLLECTION_NAME, id, payload);

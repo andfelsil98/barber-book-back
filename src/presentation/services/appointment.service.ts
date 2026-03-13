@@ -430,6 +430,7 @@ export class AppointmentService {
       );
       this.ensureTimeRangeWithinBranchSchedule(
         branch,
+        data.date,
         data.startTime,
         data.endTime
       );
@@ -533,6 +534,7 @@ export class AppointmentService {
       );
       this.ensureTimeRangeWithinBranchSchedule(
         branch,
+        dto.date,
         dto.startTime,
         dto.endTime
       );
@@ -791,14 +793,77 @@ export class AppointmentService {
     const afterContribution =
       after == null ? null : this.resolveMetricContribution(after.status, after.servicePrice);
 
+    const deltasByContext = new Map<
+      string,
+      {
+        context: AppointmentMetricContext;
+        delta: {
+          revenueDelta: number;
+          appointmentsDelta: number;
+          completedAppointmentsDelta: number;
+          cancelledAppointmentsDelta: number;
+        };
+      }
+    >();
+
     if (before != null && beforeContribution != null) {
-      const delta = this.negateContribution(beforeContribution);
-      await this.applyMetricDeltaIfNeeded(before, delta);
+      this.accumulateMetricDelta(
+        deltasByContext,
+        before,
+        this.negateContribution(beforeContribution)
+      );
     }
 
     if (after != null && afterContribution != null) {
-      await this.applyMetricDeltaIfNeeded(after, afterContribution);
+      this.accumulateMetricDelta(deltasByContext, after, afterContribution);
     }
+
+    for (const { context, delta } of deltasByContext.values()) {
+      await this.applyMetricDeltaIfNeeded(context, delta);
+    }
+  }
+
+  private accumulateMetricDelta(
+    deltasByContext: Map<
+      string,
+      {
+        context: AppointmentMetricContext;
+        delta: {
+          revenueDelta: number;
+          appointmentsDelta: number;
+          completedAppointmentsDelta: number;
+          cancelledAppointmentsDelta: number;
+        };
+      }
+    >,
+    context: AppointmentMetricContext,
+    delta: {
+      revenueDelta: number;
+      appointmentsDelta: number;
+      completedAppointmentsDelta: number;
+      cancelledAppointmentsDelta: number;
+    }
+  ): void {
+    const key = this.buildMetricContextKey(context);
+    const existing = deltasByContext.get(key);
+    if (existing == null) {
+      deltasByContext.set(key, { context, delta: { ...delta } });
+      return;
+    }
+
+    existing.delta.revenueDelta += delta.revenueDelta;
+    existing.delta.appointmentsDelta += delta.appointmentsDelta;
+    existing.delta.completedAppointmentsDelta += delta.completedAppointmentsDelta;
+    existing.delta.cancelledAppointmentsDelta += delta.cancelledAppointmentsDelta;
+  }
+
+  private buildMetricContextKey(context: AppointmentMetricContext): string {
+    return [
+      context.businessId.trim(),
+      context.branchId.trim(),
+      context.employeeId.trim(),
+      context.date.trim(),
+    ].join("|");
   }
 
   private async applyMetricDeltaIfNeeded(
@@ -1278,6 +1343,7 @@ export class AppointmentService {
 
   private ensureTimeRangeWithinBranchSchedule(
     branch: Branch,
+    date: string,
     startTime: string,
     endTime: string
   ): void {
@@ -1287,13 +1353,47 @@ export class AppointmentService {
       throw CustomError.badRequest("endTime debe ser mayor que startTime");
     }
 
-    const opening = this.timeToMinutes(branch.openingTime);
-    const closing = this.timeToMinutes(branch.closingTime);
-    if (start < opening || end > closing) {
+    const dayOfWeek = this.resolveDayOfWeek(date);
+    const daySchedule = branch.schedule.find((day) => day.day === dayOfWeek);
+
+    if (daySchedule == null || !daySchedule.isOpen) {
+      throw CustomError.badRequest("La sede no está disponible en el día seleccionado");
+    }
+
+    const isWithinAnySlot = daySchedule.slots.some((slot) => {
+      const opening = this.timeToMinutes(slot.openingTime);
+      const closing = this.timeToMinutes(slot.closingTime);
+      return start >= opening && end <= closing;
+    });
+
+    if (!isWithinAnySlot) {
       throw CustomError.badRequest(
-        "La cita debe estar dentro del horario de la sede"
+        "La cita debe estar dentro del horario configurado para ese día en la sede"
       );
     }
+  }
+
+  private resolveDayOfWeek(date: string): number {
+    const match = date.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) {
+      throw CustomError.badRequest("date debe tener formato YYYY-MM-DD");
+    }
+
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+
+    const parsed = new Date(year, month - 1, day);
+    if (
+      Number.isNaN(parsed.getTime()) ||
+      parsed.getFullYear() !== year ||
+      parsed.getMonth() !== month - 1 ||
+      parsed.getDate() !== day
+    ) {
+      throw CustomError.badRequest("date no es una fecha válida");
+    }
+
+    return parsed.getDay();
   }
 
   private async ensureClientForAppointment(

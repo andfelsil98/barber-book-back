@@ -1,16 +1,17 @@
 import { CustomError } from "../../../domain/errors/custom-error";
 import { formatName, normalizeSpaces } from "../../../domain/utils/string.utils";
 
-/** Body para actualizar un servicio: solo los campos a cambiar (mismos que en creación) + status. */
+/** Body para actualizar un servicio: description obligatoria + demás campos opcionales + status. */
 export interface UpdateServiceBodyDto {
   name?: string;
   duration?: number;
   price?: number;
-  description?: string;
+  description: string;
+  imageUrl?: string;
   status?: "ACTIVE" | "INACTIVE";
 }
 
-/** Valida body: { name?, duration?, price?, description?, status? }. Al menos un campo. */
+/** Valida body: { name?, duration?, price?, description, imageUrl?, status? }. */
 export function validateUpdateServiceDto(body: unknown): UpdateServiceBodyDto {
   if (body == null || typeof body !== "object" || Array.isArray(body)) {
     throw CustomError.badRequest("El body debe ser un objeto con al menos un campo a actualizar");
@@ -42,12 +43,18 @@ export function validateUpdateServiceDto(body: unknown): UpdateServiceBodyDto {
   }
 
   const descriptionRaw = b.description;
-  let description: string | undefined;
-  if (descriptionRaw !== undefined) {
-    if (typeof descriptionRaw !== "string") {
-      throw CustomError.badRequest("description debe ser un texto cuando se proporcione");
+  if (typeof descriptionRaw !== "string" || descriptionRaw.trim() === "") {
+    throw CustomError.badRequest("description es requerido y debe ser un texto no vacío");
+  }
+  const description = normalizeSpaces(String(descriptionRaw));
+
+  const imageUrlRaw = b.imageUrl;
+  let imageUrl: string | undefined;
+  if (imageUrlRaw !== undefined) {
+    if (typeof imageUrlRaw !== "string") {
+      throw CustomError.badRequest("imageUrl debe ser un texto cuando se proporcione");
     }
-    description = normalizeSpaces(String(descriptionRaw));
+    imageUrl = imageUrlRaw.trim();
   }
 
   const statusRaw = b.status;
@@ -59,16 +66,11 @@ export function validateUpdateServiceDto(body: unknown): UpdateServiceBodyDto {
     status = statusRaw;
   }
 
-  const hasAtLeastOne = name !== undefined || duration !== undefined || price !== undefined || description !== undefined || status !== undefined;
-  if (!hasAtLeastOne) {
-    throw CustomError.badRequest("Se debe proporcionar al menos uno de: name, duration, price, description, status");
-  }
-
-  const result: UpdateServiceBodyDto = {};
+  const result: UpdateServiceBodyDto = { description };
   if (name !== undefined) result.name = name;
   if (duration !== undefined) result.duration = duration;
   if (price !== undefined) result.price = price;
-  if (description !== undefined) result.description = description;
+  if (imageUrl !== undefined) result.imageUrl = imageUrl;
   if (status !== undefined) result.status = status;
 
   return result;

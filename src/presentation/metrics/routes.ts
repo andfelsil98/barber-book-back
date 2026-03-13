@@ -8,7 +8,7 @@ export class MetricsRoutes {
     const metricService = new MetricService();
     const metricsController = new MetricsController(metricService);
 
-    router.get("/", metricsController.getAll);
+    router.get("/", metricsController.getInsights);
 
     return router;
   }

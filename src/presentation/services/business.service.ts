@@ -437,6 +437,7 @@ export class BusinessService {
           duration: item.duration,
           price: item.price,
           description: item.description ?? "",
+          ...(item.imageUrl !== undefined && { imageUrl: item.imageUrl }),
           status: "ACTIVE",
           deletedAt: null,
           updatedAt: FirestoreDataBase.generateTimeStamp(),
@@ -450,6 +451,7 @@ export class BusinessService {
         duration: item.duration,
         price: item.price,
         description: item.description ?? "",
+        ...(item.imageUrl !== undefined && { imageUrl: item.imageUrl }),
         status: "ACTIVE" as const,
         createdAt: FirestoreDataBase.generateTimeStamp(),
       });
@@ -498,8 +500,11 @@ export class BusinessService {
       if (existing) {
         await FirestoreService.update(BRANCHES_COLLECTION, existing.id, {
           address: item.address,
-          openingTime: item.openingTime,
-          closingTime: item.closingTime,
+          location: item.location,
+          phone: item.phone,
+          phoneHasWhatsapp: item.phoneHasWhatsapp,
+          schedule: item.schedule,
+          imageGallery: item.imageGallery,
           status: "ACTIVE",
           deletedAt: null,
           updatedAt: FirestoreDataBase.generateTimeStamp(),
@@ -511,8 +516,11 @@ export class BusinessService {
         businessId,
         name: item.name,
         address: item.address,
-        openingTime: item.openingTime,
-        closingTime: item.closingTime,
+        location: item.location,
+        phone: item.phone,
+        phoneHasWhatsapp: item.phoneHasWhatsapp,
+        schedule: item.schedule,
+        imageGallery: item.imageGallery,
         status: "ACTIVE" as const,
         createdAt: FirestoreDataBase.generateTimeStamp(),
       });

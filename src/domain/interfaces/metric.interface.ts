@@ -1,8 +1,10 @@
 export type MetricType = "BUSSINESS" | "BRANCH" | "EMPLOYEE";
+export type MetricTimeFrame = "DAILY" | "MONTHLY";
 
 export interface Metric {
   id: string;
   type: MetricType;
+  timeFrame: MetricTimeFrame;
   businessId?: string;
   branchId?: string;
   employeeId?: string;
