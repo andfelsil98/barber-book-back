@@ -6,6 +6,7 @@ export interface BusinessMembership {
   score?: number;
   reviews?: number;
   isEmployee: boolean;
+  branchId?: string | null;
   roleId: string | null;
   status: "ACTIVE" | "INACTIVE" | "DELETED" | "PENDING";
   createdAt: string;

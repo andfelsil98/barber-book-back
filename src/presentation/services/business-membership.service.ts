@@ -1,6 +1,8 @@
+import { FieldValue } from "firebase-admin/firestore";
 import { FirestoreDataBase } from "../../data/firestore/firestore.database";
 import { CustomError } from "../../domain/errors/custom-error";
 import type { Business } from "../../domain/interfaces/business.interface";
+import type { Branch } from "../../domain/interfaces/branch.interface";
 import type { BusinessMembership } from "../../domain/interfaces/business-membership.interface";
 import type { Role } from "../../domain/interfaces/role.interface";
 import type { User } from "../../domain/interfaces/user.interface";
@@ -16,6 +18,7 @@ import { UserService } from "./user.service";
 
 const COLLECTION_NAME = "BusinessMemberships";
 const BUSINESSES_COLLECTION = "Businesses";
+const BRANCHES_COLLECTION = "Branches";
 const ROLE_COLLECTION = "Roles";
 const USER_COLLECTION = "Users";
 const ROOT_SUPER_ADMIN_ID = "WyeIL50oCUFg9PBvB9m9";
@@ -45,6 +48,7 @@ export class BusinessMembershipService {
       userId?: string;
       email?: string;
       businessId?: string;
+      branchId?: string;
       expandRefs?: boolean;
     }
   ): Promise<PaginatedResult<BusinessMembership | BusinessMembershipWithRelations>> {
@@ -66,6 +70,10 @@ export class BusinessMembershipService {
       const requestedBusinessId =
         params.businessId != null && params.businessId.trim() !== ""
           ? params.businessId.trim()
+          : undefined;
+      const requestedBranchId =
+        params.branchId != null && params.branchId.trim() !== ""
+          ? params.branchId.trim()
           : undefined;
       const shouldExpandRefs = params.expandRefs === true;
 
@@ -122,6 +130,15 @@ export class BusinessMembershipService {
                 field: "businessId" as const,
                 operator: "==" as const,
                 value: requestedBusinessId,
+              },
+            ]
+          : []),
+        ...(requestedBranchId != null
+          ? [
+              {
+                field: "branchId" as const,
+                operator: "==" as const,
+                value: requestedBranchId,
               },
             ]
           : []),
@@ -392,6 +409,14 @@ export class BusinessMembershipService {
         isEmployee: nextIsEmployee,
         updatedAt,
       };
+      if (nextIsEmployee) {
+        membershipPayload.branchId =
+          typeof membership.branchId === "string" && membership.branchId.trim() !== ""
+            ? membership.branchId.trim()
+            : null;
+      } else {
+        membershipPayload.branchId = FieldValue.delete();
+      }
       batch.update(db.collection(COLLECTION_NAME).doc(id), membershipPayload);
       batch.update(db.collection(BUSINESSES_COLLECTION).doc(membership.businessId), {
         employees: nextEmployees,
@@ -464,6 +489,54 @@ export class BusinessMembershipService {
     }
   }
 
+  async assignBranch(
+    membershipId: string,
+    branchId: string
+  ): Promise<BusinessMembership> {
+    try {
+      const membership = await this.getMembershipById(membershipId);
+
+      if (membership.status !== "ACTIVE") {
+        throw CustomError.badRequest(
+          "Solo se puede asignar sede a una membresía ACTIVE"
+        );
+      }
+
+      if (membership.isEmployee !== true) {
+        throw CustomError.badRequest(
+          "Solo se puede asignar sede a una membresía con isEmployee=true"
+        );
+      }
+
+      const branch = await FirestoreService.getById<Branch>(
+        BRANCHES_COLLECTION,
+        branchId
+      );
+
+      if (branch.status === "DELETED") {
+        throw CustomError.badRequest(
+          "No se puede asignar una sede eliminada a la membresía"
+        );
+      }
+
+      if (branch.businessId !== membership.businessId) {
+        throw CustomError.badRequest(
+          "La sede no pertenece al mismo negocio de la membresía"
+        );
+      }
+
+      await FirestoreService.update(COLLECTION_NAME, membershipId, {
+        branchId: branch.id,
+        updatedAt: FirestoreDataBase.generateTimeStamp(),
+      });
+
+      return await this.getMembershipById(membershipId);
+    } catch (error) {
+      if (error instanceof CustomError) throw error;
+      throw CustomError.internalServerError("Error interno del servidor");
+    }
+  }
+
   private async getMembershipByBusinessAndRequesterDocument(
     businessId: string,
     requesterDocument: string
@@ -512,9 +585,23 @@ export class BusinessMembershipService {
   }
 
   private normalizeMembership(membership: BusinessMembership): BusinessMembership {
+    const { branchId: rawBranchId, ...membershipWithoutBranch } = membership;
+    const normalizedBranchId =
+      typeof rawBranchId === "string" && rawBranchId.trim() !== ""
+        ? rawBranchId.trim()
+        : null;
+
+    if (membership.isEmployee === true) {
+      return {
+        ...membershipWithoutBranch,
+        isEmployee: true,
+        branchId: normalizedBranchId,
+      };
+    }
+
     return {
-      ...membership,
-      isEmployee: membership.isEmployee === true,
+      ...membershipWithoutBranch,
+      isEmployee: false,
     };
   }
 

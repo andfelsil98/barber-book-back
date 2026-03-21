@@ -22,6 +22,7 @@ export class BusinessMembershipRoutes {
     router.patch("/:id/toggle-status", businessMembershipController.toggleStatus);
     router.patch("/:id/toggle-employee", businessMembershipController.toggleEmployee);
     router.post("/assign-role", businessMembershipController.assignRole);
+    router.post("/assign-branch", businessMembershipController.assignBranch);
 
     return router;
   }

@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import type { BusinessMembershipService } from "../services/business-membership.service";
 import {
+  validateAssignBranchDto,
   validateAssignRoleDto,
   validateBusinessIdHeader,
   validateMembershipIdParam,
@@ -50,6 +51,11 @@ export class BusinessMembershipController {
       req.query.businessId.trim() !== ""
         ? req.query.businessId.trim()
         : undefined;
+    const branchId =
+      typeof req.query.branchId === "string" &&
+      req.query.branchId.trim() !== ""
+        ? req.query.branchId.trim()
+        : undefined;
     const expandRefsRaw = req.query.expandRefs;
     const expandRefs =
       typeof expandRefsRaw === "string" &&
@@ -63,6 +69,7 @@ export class BusinessMembershipController {
         ...(userId != null && { userId }),
         ...(email != null && { email }),
         ...(businessId != null && { businessId }),
+        ...(branchId != null && { branchId }),
         ...(expandRefs && { expandRefs: true }),
       })
       .then((result) => {
@@ -112,6 +119,17 @@ export class BusinessMembershipController {
         businessId,
         requesterDocument: requesterDocumentRaw.trim(),
       })
+      .then((membership) => {
+        res.status(200).json(membership);
+      })
+      .catch(next);
+  };
+
+  public assignBranch = (req: Request, res: Response, next: NextFunction) => {
+    const dto = validateAssignBranchDto(req.body);
+
+    this.businessMembershipService
+      .assignBranch(dto.membershipId, dto.branchId)
       .then((membership) => {
         res.status(200).json(membership);
       })

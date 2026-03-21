@@ -5,6 +5,11 @@ export interface AssignRoleDto {
   roleId: string;
 }
 
+export interface AssignBranchDto {
+  membershipId: string;
+  branchId: string;
+}
+
 export function validateBusinessIdHeader(value: unknown): string {
   if (typeof value !== "string" || value.trim() === "") {
     throw CustomError.badRequest(
@@ -46,5 +51,32 @@ export function validateAssignRoleDto(body: unknown): AssignRoleDto {
   return {
     membershipId: membershipIdRaw.trim(),
     roleId: roleIdRaw.trim(),
+  };
+}
+
+export function validateAssignBranchDto(body: unknown): AssignBranchDto {
+  if (body == null || typeof body !== "object" || Array.isArray(body)) {
+    throw CustomError.badRequest("El body debe ser un objeto");
+  }
+
+  const b = body as Record<string, unknown>;
+
+  const membershipIdRaw = b.membershipId;
+  if (typeof membershipIdRaw !== "string" || membershipIdRaw.trim() === "") {
+    throw CustomError.badRequest(
+      "membershipId es requerido y debe ser un texto no vacío"
+    );
+  }
+
+  const branchIdRaw = b.branchId;
+  if (typeof branchIdRaw !== "string" || branchIdRaw.trim() === "") {
+    throw CustomError.badRequest(
+      "branchId es requerido y debe ser un texto no vacío"
+    );
+  }
+
+  return {
+    membershipId: membershipIdRaw.trim(),
+    branchId: branchIdRaw.trim(),
   };
 }
