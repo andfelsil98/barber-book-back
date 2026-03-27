@@ -1,4 +1,8 @@
 import { CustomError } from "../../../domain/errors/custom-error";
+import {
+  BUSINESS_MEMBERSHIP_QUERYABLE_STATUSES,
+  type BusinessMembershipQueryableStatus,
+} from "../../../domain/interfaces/business-membership.interface";
 
 export interface AssignRoleDto {
   membershipId: string;
@@ -26,6 +30,33 @@ export function validateMembershipIdParam(id: unknown): string {
     );
   }
   return id.trim();
+}
+
+export function validateMembershipStatusQuery(
+  value: unknown
+): BusinessMembershipQueryableStatus | undefined {
+  if (value == null) {
+    return undefined;
+  }
+
+  if (typeof value !== "string" || value.trim() === "") {
+    throw CustomError.badRequest(
+      "status debe ser un texto no vacío cuando se proporcione"
+    );
+  }
+
+  const normalizedStatus = value.trim().toUpperCase();
+  if (
+    !BUSINESS_MEMBERSHIP_QUERYABLE_STATUSES.includes(
+      normalizedStatus as BusinessMembershipQueryableStatus
+    )
+  ) {
+    throw CustomError.badRequest(
+      "status debe ser ACTIVE, INACTIVE o PENDING cuando se proporcione"
+    );
+  }
+
+  return normalizedStatus as BusinessMembershipQueryableStatus;
 }
 
 export function validateAssignRoleDto(body: unknown): AssignRoleDto {

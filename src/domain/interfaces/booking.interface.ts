@@ -1,4 +1,11 @@
-export type BookingStatus = "CREATED" | "CANCELLED" | "FINISHED" | "DELETED";
+export const BOOKING_STATUSES = [
+  "CREATED",
+  "CANCELLED",
+  "FINISHED",
+  "DELETED",
+] as const;
+
+export type BookingStatus = (typeof BOOKING_STATUSES)[number];
 export type BookingPaymentMethod =
   | "CASH"
   | "NEQUI"

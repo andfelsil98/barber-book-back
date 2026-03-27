@@ -3,7 +3,7 @@ import { DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from "../../domain/int
 import { validateCreateBusinessCompleteDto } from "./dtos/create-business-complete.dto";
 import { validateUpdateBusinessDto } from "./dtos/update-business.dto";
 import type { BusinessService } from "../services/business.service";
-import { envs } from "../../config/envs";
+import { isRootUserEmail } from "../../config/root-user-emails.config";
 import { CustomError } from "../../domain/errors/custom-error";
 import { normalizeConsecutivePrefix } from "../../domain/utils/booking-consecutive.utils";
 
@@ -56,7 +56,7 @@ export class BusinessController {
       return;
     }
 
-    if (email !== envs.ROOT_USER_EMAIL) {
+    if (!isRootUserEmail(email)) {
       next(CustomError.forbidden("No tienes permisos para crear negocios."));
       return;
     }

@@ -1,5 +1,9 @@
 import type { NextFunction, Request, Response } from "express";
 import {
+  BOOKING_STATUSES,
+  type BookingStatus,
+} from "../../domain/interfaces/booking.interface";
+import {
   DEFAULT_PAGE,
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
@@ -21,6 +25,24 @@ function parseIncludeDeletesQuery(value: unknown): boolean | undefined {
   if (normalized === "true") return true;
   if (normalized === "false") return false;
   throw new Error("includeDeletes debe ser true o false");
+}
+
+function parseBookingStatusQuery(value: unknown): BookingStatus | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") {
+    throw new Error("status debe ser un texto no vacío cuando se proporcione");
+  }
+
+  const normalized = value.trim().toUpperCase();
+  if (normalized === "") {
+    throw new Error("status debe ser un texto no vacío cuando se proporcione");
+  }
+
+  if (!BOOKING_STATUSES.includes(normalized as BookingStatus)) {
+    throw new Error("status debe ser CREATED, CANCELLED, FINISHED o DELETED");
+  }
+
+  return normalized as BookingStatus;
 }
 
 export class BookingController {
@@ -51,11 +73,16 @@ export class BookingController {
         typeof req.query.businessId === "string" && req.query.businessId.trim() !== ""
           ? req.query.businessId.trim()
           : undefined;
+      const clientId =
+        typeof req.query.clientId === "string" && req.query.clientId.trim() !== ""
+          ? req.query.clientId.trim()
+          : undefined;
       const consecutive =
         typeof req.query.consecutive === "string" &&
         req.query.consecutive.trim() !== ""
           ? req.query.consecutive.trim().toUpperCase()
           : undefined;
+      const status = parseBookingStatusQuery(req.query.status);
       const includeDeletes = parseIncludeDeletesQuery(req.query.includeDeletes);
       this.bookingService
         .getAllBookings({
@@ -63,7 +90,9 @@ export class BookingController {
           pageSize,
           ...(id != null && { id }),
           ...(businessId != null && { businessId }),
+          ...(clientId != null && { clientId }),
           ...(consecutive != null && { consecutive }),
+          ...(status != null && { status }),
           ...(includeDeletes != null && { includeDeletes }),
         })
         .then((result) => {

@@ -13,3 +13,12 @@ export interface BusinessMembership {
   updatedAt?: string;
   deletedAt?: string;
 }
+
+export const BUSINESS_MEMBERSHIP_QUERYABLE_STATUSES = [
+  "ACTIVE",
+  "INACTIVE",
+  "PENDING",
+] as const;
+
+export type BusinessMembershipQueryableStatus =
+  (typeof BUSINESS_MEMBERSHIP_QUERYABLE_STATUSES)[number];

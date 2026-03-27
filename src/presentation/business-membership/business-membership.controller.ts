@@ -5,6 +5,7 @@ import {
   validateAssignRoleDto,
   validateBusinessIdHeader,
   validateMembershipIdParam,
+  validateMembershipStatusQuery,
 } from "./dtos/business-membership.dto";
 import {
   DEFAULT_PAGE,
@@ -56,6 +57,11 @@ export class BusinessMembershipController {
       req.query.branchId.trim() !== ""
         ? req.query.branchId.trim()
         : undefined;
+    const roleId =
+      typeof req.query.roleId === "string" && req.query.roleId.trim() !== ""
+        ? req.query.roleId.trim()
+        : undefined;
+    const status = validateMembershipStatusQuery(req.query.status);
     const expandRefsRaw = req.query.expandRefs;
     const expandRefs =
       typeof expandRefsRaw === "string" &&
@@ -70,6 +76,8 @@ export class BusinessMembershipController {
         ...(email != null && { email }),
         ...(businessId != null && { businessId }),
         ...(branchId != null && { branchId }),
+        ...(roleId != null && { roleId }),
+        ...(status != null && { status }),
         ...(expandRefs && { expandRefs: true }),
       })
       .then((result) => {

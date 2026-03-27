@@ -7,6 +7,7 @@ import type {
   BookingPaymentStatus,
   BookingStatus,
 } from "../../domain/interfaces/booking.interface";
+import { BOOKING_STATUSES } from "../../domain/interfaces/booking.interface";
 import type { Business } from "../../domain/interfaces/business.interface";
 import type { Service } from "../../domain/interfaces/service.interface";
 import type {
@@ -49,15 +50,37 @@ export class BookingService {
     params: PaginationParams & {
       id?: string;
       businessId?: string;
+      clientId?: string;
       consecutive?: string;
+      status?: BookingStatus;
       includeDeletes?: boolean;
     }
   ): Promise<PaginatedResult<Booking>> {
     try {
       const page = Math.max(1, params.page);
       const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, params.pageSize));
+      const requestedStatusRaw =
+        typeof params.status === "string" && params.status.trim() !== ""
+          ? params.status.trim().toUpperCase()
+          : undefined;
+      const requestedStatus = requestedStatusRaw as BookingStatus | undefined;
+
+      if (requestedStatus != null && !BOOKING_STATUSES.includes(requestedStatus)) {
+        throw CustomError.badRequest(
+          "status debe ser CREATED, CANCELLED, FINISHED o DELETED"
+        );
+      }
+
       const filters = [
-        ...(!params.includeDeletes
+        ...(requestedStatus != null
+          ? [
+              {
+                field: "status" as const,
+                operator: "==" as const,
+                value: requestedStatus,
+              },
+            ]
+          : !params.includeDeletes
           ? [
               {
                 field: "status" as const,
@@ -81,6 +104,15 @@ export class BookingService {
                 field: "businessId" as const,
                 operator: "==" as const,
                 value: params.businessId.trim(),
+              },
+            ]
+          : []),
+        ...(params.clientId != null && params.clientId.trim() !== ""
+          ? [
+              {
+                field: "clientId" as const,
+                operator: "==" as const,
+                value: params.clientId.trim(),
               },
             ]
           : []),

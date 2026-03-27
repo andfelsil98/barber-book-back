@@ -3,7 +3,11 @@ import { FirestoreDataBase } from "../../data/firestore/firestore.database";
 import { CustomError } from "../../domain/errors/custom-error";
 import type { Business } from "../../domain/interfaces/business.interface";
 import type { Branch } from "../../domain/interfaces/branch.interface";
-import type { BusinessMembership } from "../../domain/interfaces/business-membership.interface";
+import {
+  BUSINESS_MEMBERSHIP_QUERYABLE_STATUSES,
+  type BusinessMembership,
+  type BusinessMembershipQueryableStatus,
+} from "../../domain/interfaces/business-membership.interface";
 import type { Role } from "../../domain/interfaces/role.interface";
 import type { User } from "../../domain/interfaces/user.interface";
 import {
@@ -52,6 +56,8 @@ export class BusinessMembershipService {
       email?: string;
       businessId?: string;
       branchId?: string;
+      roleId?: string;
+      status?: BusinessMembershipQueryableStatus;
       expandRefs?: boolean;
     }
   ): Promise<PaginatedResult<BusinessMembership | BusinessMembershipWithRelations>> {
@@ -78,7 +84,26 @@ export class BusinessMembershipService {
         params.branchId != null && params.branchId.trim() !== ""
           ? params.branchId.trim()
           : undefined;
+      const requestedRoleId =
+        params.roleId != null && params.roleId.trim() !== ""
+          ? params.roleId.trim()
+          : undefined;
+      const requestedStatusRaw =
+        typeof params.status === "string" && params.status.trim() !== ""
+          ? params.status.trim().toUpperCase()
+          : undefined;
+      const requestedStatus =
+        requestedStatusRaw as BusinessMembershipQueryableStatus | undefined;
       const shouldExpandRefs = params.expandRefs === true;
+
+      if (
+        requestedStatus != null &&
+        !BUSINESS_MEMBERSHIP_QUERYABLE_STATUSES.includes(requestedStatus)
+      ) {
+        throw CustomError.badRequest(
+          "status debe ser ACTIVE, INACTIVE o PENDING cuando se proporcione"
+        );
+      }
 
       let effectiveUserId = requestedUserId;
 
@@ -104,11 +129,21 @@ export class BusinessMembershipService {
       }
 
       const filters = [
-        {
-          field: "status" as const,
-          operator: "in" as const,
-          value: ["ACTIVE", "INACTIVE", "PENDING"],
-        },
+        ...(requestedStatus != null
+          ? [
+              {
+                field: "status" as const,
+                operator: "==" as const,
+                value: requestedStatus,
+              },
+            ]
+          : [
+              {
+                field: "status" as const,
+                operator: "in" as const,
+                value: BUSINESS_MEMBERSHIP_QUERYABLE_STATUSES,
+              },
+            ]),
         ...(requestedId != null
           ? [
               {
@@ -142,6 +177,15 @@ export class BusinessMembershipService {
                 field: "branchId" as const,
                 operator: "==" as const,
                 value: requestedBranchId,
+              },
+            ]
+          : []),
+        ...(requestedRoleId != null
+          ? [
+              {
+                field: "roleId" as const,
+                operator: "==" as const,
+                value: requestedRoleId,
               },
             ]
           : []),
