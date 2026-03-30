@@ -19,6 +19,10 @@ export class BusinessMembershipRoutes {
     );
 
     router.get("/", businessMembershipController.getAll);
+    router.post(
+      "/create-by-document",
+      businessMembershipController.createPendingByDocument
+    );
     router.patch("/:id/toggle-status", businessMembershipController.toggleStatus);
     router.patch("/:id/toggle-employee", businessMembershipController.toggleEmployee);
     router.post("/assign-role", businessMembershipController.assignRole);

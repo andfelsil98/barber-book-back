@@ -1,5 +1,6 @@
 import { CustomError } from "../../../domain/errors/custom-error";
 import { validateConsecutivePrefix } from "../../../domain/utils/booking-consecutive.utils";
+import { validateAndNormalizeStartPeriods } from "../../../domain/utils/usage-period.utils";
 import {
   normalizeSpaces,
   removeAccents,
@@ -12,6 +13,8 @@ export type BusinessType = (typeof BUSINESS_TYPES)[number];
 export interface CreateBusinessDto {
   name: string;
   type: BusinessType;
+  planId: string;
+  startPeriods: string[];
   consecutivePrefix: string;
   logoUrl?: string;
   /** Generado a partir de name en validateCreateBusinessDto. */
@@ -50,6 +53,17 @@ export function validateCreateBusinessDto(body: unknown): CreateBusinessDto {
       `type debe ser uno de: ${BUSINESS_TYPES.join(", ")}`
     );
   }
+  const planIdRaw = b.planId;
+  if (typeof planIdRaw !== "string" || planIdRaw.trim() === "") {
+    throw CustomError.badRequest("planId es requerido y debe ser un texto no vacío");
+  }
+  const subscriptionStatusRaw = b.subscriptionStatus;
+  if (subscriptionStatusRaw !== undefined) {
+    throw CustomError.badRequest(
+      "subscriptionStatus no debe enviarse al crear un negocio"
+    );
+  }
+  const startPeriods = validateAndNormalizeStartPeriods(b.startPeriods, "startPeriods");
   const consecutivePrefix = validateConsecutivePrefix(b.consecutivePrefix);
   const logoUrlRaw = b.logoUrl;
   if (logoUrlRaw !== undefined && typeof logoUrlRaw !== "string") {
@@ -60,6 +74,8 @@ export function validateCreateBusinessDto(body: unknown): CreateBusinessDto {
   return {
     name,
     type,
+    planId: planIdRaw.trim(),
+    startPeriods,
     consecutivePrefix,
     ...(logoUrl !== undefined && logoUrl !== "" && { logoUrl }),
     slug: slugFromName(name),

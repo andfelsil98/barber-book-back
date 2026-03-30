@@ -14,6 +14,11 @@ export interface AssignBranchDto {
   branchId: string;
 }
 
+export interface CreatePendingMembershipByDocumentDto {
+  document: string;
+  businessId: string;
+}
+
 export function validateBusinessIdHeader(value: unknown): string {
   if (typeof value !== "string" || value.trim() === "") {
     throw CustomError.badRequest(
@@ -109,5 +114,34 @@ export function validateAssignBranchDto(body: unknown): AssignBranchDto {
   return {
     membershipId: membershipIdRaw.trim(),
     branchId: branchIdRaw.trim(),
+  };
+}
+
+export function validateCreatePendingMembershipByDocumentDto(
+  body: unknown
+): CreatePendingMembershipByDocumentDto {
+  if (body == null || typeof body !== "object" || Array.isArray(body)) {
+    throw CustomError.badRequest("El body debe ser un objeto");
+  }
+
+  const b = body as Record<string, unknown>;
+
+  const documentRaw = b.document;
+  if (typeof documentRaw !== "string" || documentRaw.trim() === "") {
+    throw CustomError.badRequest(
+      "document es requerido y debe ser un texto no vacío"
+    );
+  }
+
+  const businessIdRaw = b.businessId;
+  if (typeof businessIdRaw !== "string" || businessIdRaw.trim() === "") {
+    throw CustomError.badRequest(
+      "businessId es requerido y debe ser un texto no vacío"
+    );
+  }
+
+  return {
+    document: documentRaw.trim(),
+    businessId: businessIdRaw.trim(),
   };
 }

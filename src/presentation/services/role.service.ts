@@ -12,6 +12,7 @@ import {
   buildPagination,
   MAX_PAGE_SIZE,
 } from "../../domain/interfaces/pagination.interface";
+import { BusinessUsageLimitService } from "./business-usage-limit.service";
 import FirestoreService from "./firestore.service";
 import type { CreateRoleDto } from "../role/dtos/create-role.dto";
 import type {
@@ -29,6 +30,11 @@ function toNameKey(value: string): string {
 }
 
 export class RoleService {
+  constructor(
+    private readonly businessUsageLimitService: BusinessUsageLimitService =
+      new BusinessUsageLimitService()
+  ) {}
+
   async getAllRoles(
     params: PaginationParams & { businessId?: string }
   ): Promise<PaginatedResult<Role>> {
@@ -127,6 +133,9 @@ export class RoleService {
   }
 
   async createRole(dto: CreateRoleDto): Promise<Role> {
+    let consumedBusinessId: string | null = null;
+    let createdRoleId: string | null = null;
+
     try {
       const existingRoles = await FirestoreService.getAll<Role>(COLLECTION_NAME);
       const nameKey = toNameKey(dto.name);
@@ -161,6 +170,11 @@ export class RoleService {
         resolvedPermissions.push(permissions[0]!);
       }
 
+      if (dto.type === "CUSTOM") {
+        await this.businessUsageLimitService.consume(dto.businessId!, "roles", 1);
+        consumedBusinessId = dto.businessId!;
+      }
+
       const data = {
         name: dto.name,
         type: dto.type,
@@ -173,6 +187,7 @@ export class RoleService {
         COLLECTION_NAME,
         data
       )) as Role;
+      createdRoleId = role.id;
 
       // Crear subcolección permissions bajo el rol
       for (const permission of resolvedPermissions) {
@@ -191,6 +206,17 @@ export class RoleService {
 
       return role;
     } catch (error) {
+      if (createdRoleId != null) {
+        await FirestoreService.deleteSubcollectionDocuments(
+          COLLECTION_NAME,
+          createdRoleId,
+          "Permissions"
+        ).catch(() => undefined);
+        await FirestoreService.delete(COLLECTION_NAME, createdRoleId).catch(() => undefined);
+      }
+      if (consumedBusinessId != null) {
+        await this.businessUsageLimitService.release(consumedBusinessId, "roles", 1).catch(() => undefined);
+      }
       if (error instanceof CustomError) throw error;
       throw CustomError.internalServerError("Error interno del servidor");
     }
@@ -301,6 +327,7 @@ export class RoleService {
           "No se puede eliminar el rol porque hay usuarios con membresías que lo tienen asignado"
         );
       }
+      const role = roles[0]!;
 
       await FirestoreService.deleteSubcollectionDocuments(
         COLLECTION_NAME,
@@ -308,7 +335,12 @@ export class RoleService {
         "Permissions"
       );
 
-      return await FirestoreService.delete(COLLECTION_NAME, id);
+      const result = await FirestoreService.delete(COLLECTION_NAME, id);
+      if (role.type === "CUSTOM" && role.businessId?.trim()) {
+        await this.businessUsageLimitService.release(role.businessId, "roles", 1);
+      }
+
+      return result;
     } catch (error) {
       if (error instanceof CustomError) throw error;
       throw CustomError.internalServerError("Error interno del servidor");

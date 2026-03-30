@@ -21,6 +21,7 @@ import type {
   CreateBookingDto,
 } from "../booking/dtos/create-booking.dto";
 import type { UpdateBookingDto } from "../booking/dtos/update-booking.dto";
+import { BusinessUsageLimitService } from "./business-usage-limit.service";
 import FirestoreService from "./firestore.service";
 import { AppointmentService } from "./appointment.service";
 import { ReviewService } from "./review.service";
@@ -43,7 +44,9 @@ export class BookingService {
     private readonly whatsAppService?: WhatsAppService,
     private readonly userService: UserService = new UserService(),
     private readonly bookingConsecutiveService: BookingConsecutiveService =
-      new BookingConsecutiveService()
+      new BookingConsecutiveService(),
+    private readonly businessUsageLimitService: BusinessUsageLimitService =
+      new BusinessUsageLimitService()
   ) {}
 
   async getAllBookings(
@@ -146,6 +149,7 @@ export class BookingService {
     let createdBookingId: string | null = null;
     const createdAppointmentIds: string[] = [];
     const createdAppointments: Appointment[] = [];
+    let bookingQuotaConsumed = false;
 
     try {
       if (dto.appointments.length === 0) {
@@ -188,6 +192,9 @@ export class BookingService {
         dto.businessId,
         business
       );
+
+      await this.businessUsageLimitService.consume(dto.businessId, "bookings", 1);
+      bookingQuotaConsumed = true;
 
       const createdBooking = await FirestoreService.create<{
         businessId: string;
@@ -267,6 +274,11 @@ export class BookingService {
       return createdBookingDoc;
     } catch (error) {
       await this.compensateFailedCreation(createdBookingId, createdAppointmentIds);
+      if (bookingQuotaConsumed) {
+        await this.businessUsageLimitService.release(dto.businessId, "bookings", 1).catch(
+          () => undefined
+        );
+      }
       if (error instanceof CustomError) throw error;
       throw CustomError.internalServerError("Error interno del servidor");
     }
@@ -541,6 +553,14 @@ export class BookingService {
         id,
         beforeRevenueSnapshot
       );
+
+      if (dto.status === "DELETED" && existingBooking.status !== "DELETED") {
+        await this.businessUsageLimitService.release(
+          existingBooking.businessId,
+          "bookings",
+          1
+        );
+      }
 
       if (
         !hasBookingEditChanges &&
@@ -1044,6 +1064,12 @@ export class BookingService {
     nextStatus: BookingStatus,
     appointmentIds: string[]
   ): Promise<void> {
+    if (currentStatus === "DELETED" && nextStatus !== "DELETED") {
+      throw CustomError.badRequest(
+        "No se puede cambiar el estado de un agendamiento eliminado"
+      );
+    }
+
     if (nextStatus === "DELETED") {
       return;
     }

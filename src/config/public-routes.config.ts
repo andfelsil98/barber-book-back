@@ -34,4 +34,25 @@ export const PUBLIC_ROUTE_METHOD_PATHS: Array<{
   { method: "POST", path: "/api/bookings" },
   { method: "PUT", path: "/api/bookings", match: "prefix" },
   { method: "POST", path: "/api/whatsapp/send-message", match: "prefix" },
+  { method: "POST", path: "/api/business/usage/reconcile-today" },
+  { method: "GET", path: "/api/plans" },
+];
+
+/**
+ * Rutas privadas que siguen requiriendo autenticación,
+ * pero NO deben exigir el header businessId.
+ */
+export const BUSINESS_ID_HEADER_EXEMPT_METHOD_PATHS: Array<{
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  path: string;
+  match?: "exact" | "prefix";
+}> = [
+  { method: "POST", path: "/api/business" },
+  { method: "POST", path: "/api/business-memberships/create-by-document" },
+  { method: "PUT", path: "/api/business", match: "prefix" },
+  { method: "PATCH", path: "/api/business", match: "prefix" },
+  { method: "DELETE", path: "/api/business", match: "prefix" },
+  { method: "POST", path: "/api/plans" },
+  { method: "PUT", path: "/api/plans", match: "prefix" },
+  { method: "DELETE", path: "/api/plans", match: "prefix" },
 ];

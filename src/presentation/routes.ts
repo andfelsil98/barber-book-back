@@ -13,6 +13,7 @@ import { BookingRoutes } from "./booking/routes";
 import { ReviewRoutes } from "./review/routes";
 import { WhatsAppRoutes } from "./whatsapp/routes";
 import { MetricsRoutes } from "./metrics/routes";
+import { PlanRoutes } from "./plan/routes";
 
 export class AppRoutes {
   static get routes(): Router {
@@ -31,6 +32,7 @@ export class AppRoutes {
     router.use("/api/reviews", ReviewRoutes.routes);
     router.use("/api/whatsapp", WhatsAppRoutes.routes);
     router.use("/api/metrics", MetricsRoutes.routes);
+    router.use("/api/plans", PlanRoutes.routes);
     return router;
   }
 }

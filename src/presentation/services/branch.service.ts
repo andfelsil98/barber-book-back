@@ -8,6 +8,7 @@ import type { PaginatedResult, PaginationParams } from "../../domain/interfaces/
 import { MAX_PAGE_SIZE } from "../../domain/interfaces/pagination.interface";
 import type { CreateBranchesBodyDto } from "../branch/dtos/create-branch.dto";
 import type { UpdateBranchBodyDto } from "../branch/dtos/update-branch.dto";
+import { BusinessUsageLimitService } from "./business-usage-limit.service";
 import FirestoreService from "./firestore.service";
 import { MetricService } from "./metric.service";
 import { ReviewService } from "./review.service";
@@ -26,7 +27,9 @@ export class BranchService {
     private readonly reviewService: ReviewService = new ReviewService(),
     private readonly metricService: MetricService = new MetricService(),
     private readonly schedulingIntegrityService: SchedulingIntegrityService =
-      new SchedulingIntegrityService()
+      new SchedulingIntegrityService(),
+    private readonly businessUsageLimitService: BusinessUsageLimitService =
+      new BusinessUsageLimitService()
   ) {}
 
   async getAllBranches(
@@ -89,20 +92,26 @@ export class BranchService {
 
       const created: Branch[] = [];
       for (const item of dto.branches) {
-        const data = {
-          businessId: dto.businessId,
-          name: item.name,
-          address: item.address,
-          location: item.location,
-          phone: item.phone,
-          phoneHasWhatsapp: item.phoneHasWhatsapp,
-          schedule: item.schedule,
-          imageGallery: item.imageGallery,
-          status: "ACTIVE" as const,
-          createdAt: FirestoreDataBase.generateTimeStamp(),
-        };
-        const result = await FirestoreService.create(COLLECTION_NAME, data);
-        created.push(result);
+        await this.businessUsageLimitService.consume(dto.businessId, "branches", 1);
+        try {
+          const data = {
+            businessId: dto.businessId,
+            name: item.name,
+            address: item.address,
+            location: item.location,
+            phone: item.phone,
+            phoneHasWhatsapp: item.phoneHasWhatsapp,
+            schedule: item.schedule,
+            imageGallery: item.imageGallery,
+            status: "ACTIVE" as const,
+            createdAt: FirestoreDataBase.generateTimeStamp(),
+          };
+          const result = await FirestoreService.create(COLLECTION_NAME, data);
+          created.push(result);
+        } catch (error) {
+          await this.businessUsageLimitService.release(dto.businessId, "branches", 1).catch(() => undefined);
+          throw error;
+        }
       }
       return created;
     } catch (error) {
@@ -139,6 +148,15 @@ export class BranchService {
         }
       }
 
+      const isRestoringDeletedBranch =
+        branch.status === "DELETED" &&
+        (dto.status === "ACTIVE" || dto.status === "INACTIVE");
+      if (branch.status === "DELETED" && !isRestoringDeletedBranch) {
+        throw CustomError.badRequest(
+          "No se puede editar una sede eliminada sin reactivarla"
+        );
+      }
+
       const payload: Record<string, unknown> = {
         updatedAt: FirestoreDataBase.generateTimeStamp(),
       };
@@ -150,8 +168,20 @@ export class BranchService {
       payload.schedule = dto.schedule;
       payload.imageGallery = dto.imageGallery;
       if (dto.status !== undefined) payload.status = dto.status;
-
-      await FirestoreService.update(COLLECTION_NAME, id, payload);
+      if (isRestoringDeletedBranch) {
+        payload.deletedAt = null;
+        await this.businessUsageLimitService.consume(branch.businessId, "branches", 1);
+        try {
+          await FirestoreService.update(COLLECTION_NAME, id, payload);
+        } catch (error) {
+          await this.businessUsageLimitService.release(branch.businessId, "branches", 1).catch(
+            () => undefined
+          );
+          throw error;
+        }
+      } else {
+        await FirestoreService.update(COLLECTION_NAME, id, payload);
+      }
       return await FirestoreService.getById<Branch>(COLLECTION_NAME, id);
     } catch (error) {
       if (error instanceof CustomError) throw error;
@@ -179,6 +209,7 @@ export class BranchService {
         this.reviewService.deleteReviewsByBranchId(branch.id, {
           skipBranchScoreUpdate: true,
         }),
+        this.businessUsageLimitService.release(branch.businessId, "branches", 1),
       ]);
       return await FirestoreService.getById<Branch>(COLLECTION_NAME, id);
     } catch (error) {

@@ -1,9 +1,11 @@
 import type { NextFunction, Request, Response } from "express";
 import type { BusinessMembershipService } from "../services/business-membership.service";
+import { isRootUserEmail } from "../../config/root-user-emails.config";
+import { CustomError } from "../../domain/errors/custom-error";
 import {
   validateAssignBranchDto,
   validateAssignRoleDto,
-  validateBusinessIdHeader,
+  validateCreatePendingMembershipByDocumentDto,
   validateMembershipIdParam,
   validateMembershipStatusQuery,
 } from "./dtos/business-membership.dto";
@@ -12,7 +14,6 @@ import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
 } from "../../domain/interfaces/pagination.interface";
-import { CustomError } from "../../domain/errors/custom-error";
 
 export class BusinessMembershipController {
   constructor(
@@ -108,7 +109,15 @@ export class BusinessMembershipController {
 
   public assignRole = (req: Request, res: Response, next: NextFunction) => {
     const dto = validateAssignRoleDto(req.body);
-    const businessId = validateBusinessIdHeader(req.header("businessId"));
+    const businessId = req.businessId;
+    if (typeof businessId !== "string" || businessId.trim() === "") {
+      next(
+        CustomError.badRequest(
+          "El header businessId es requerido y debe ser un texto no vacío"
+        )
+      );
+      return;
+    }
     const requesterDocumentRaw = req.decodedIdToken?.["document"];
     if (
       typeof requesterDocumentRaw !== "string" ||
@@ -143,4 +152,37 @@ export class BusinessMembershipController {
       })
       .catch(next);
   };
+
+  public createPendingByDocument = (
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) => {
+    try {
+      this.ensureRootUser(req, "crear membresías");
+      const dto = validateCreatePendingMembershipByDocumentDto(req.body);
+
+      this.businessMembershipService
+        .createPendingByDocument(dto)
+        .then((membership) => {
+          res.status(201).json(membership);
+        })
+        .catch(next);
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  private ensureRootUser(req: Request, action: string): void {
+    const email = req.decodedIdToken?.email;
+    if (!email) {
+      throw CustomError.unauthorized(
+        "Token de sesión inválido: email no presente en el token."
+      );
+    }
+
+    if (!isRootUserEmail(email)) {
+      throw CustomError.forbidden(`No tienes permisos para ${action}.`);
+    }
+  }
 }

@@ -1,12 +1,16 @@
 import { CustomError } from "../../../domain/errors/custom-error";
 import { validateConsecutivePrefix } from "../../../domain/utils/booking-consecutive.utils";
+import { validateAndNormalizeStartPeriods } from "../../../domain/utils/usage-period.utils";
 import {
   normalizeSpaces,
   removeAccents,
   slugFromName,
 } from "../../../domain/utils/string.utils";
 import type { BusinessType } from "./create-business.dto";
-import { BUSINESS_TYPES, isBusinessType } from "./create-business.dto";
+import {
+  BUSINESS_TYPES,
+  isBusinessType,
+} from "./create-business.dto";
 import type { CreateServiceItemDto } from "../../service/dtos/create-service.dto";
 import { validateCreateServiceItemDto } from "../../service/dtos/create-service.dto";
 import type { CreateBranchItemDto } from "../../branch/dtos/create-branch.dto";
@@ -15,6 +19,8 @@ import { validateCreateBranchItemDto } from "../../branch/dtos/create-branch.dto
 export interface UpdateBusinessDto {
   name?: string;
   type?: BusinessType;
+  planId?: string;
+  startPeriods?: string[];
   consecutivePrefix?: string;
   logoUrl?: string;
   /** Generado si se envía name. */
@@ -59,6 +65,28 @@ export function validateUpdateBusinessDto(body: unknown): UpdateBusinessDto {
       );
     }
     result.type = type;
+  }
+
+  const planIdRaw = b.planId;
+  if (planIdRaw !== undefined) {
+    if (typeof planIdRaw !== "string" || planIdRaw.trim() === "") {
+      throw CustomError.badRequest("planId debe ser un texto no vacío cuando se proporcione");
+    }
+    result.planId = planIdRaw.trim();
+  }
+
+  const subscriptionStatus = b.subscriptionStatus;
+  if (subscriptionStatus !== undefined) {
+    throw CustomError.badRequest(
+      "subscriptionStatus no se puede enviar ni editar en negocios"
+    );
+  }
+
+  if (b.startPeriods !== undefined) {
+    result.startPeriods = validateAndNormalizeStartPeriods(
+      b.startPeriods,
+      "startPeriods"
+    );
   }
 
   if (b.consecutivePrefix !== undefined) {
@@ -114,7 +142,7 @@ export function validateUpdateBusinessDto(body: unknown): UpdateBusinessDto {
 
   if (Object.keys(result).length === 0) {
     throw CustomError.badRequest(
-      "Se debe proporcionar al menos un campo (name, type, consecutivePrefix, logoUrl, services, branches)"
+      "Se debe proporcionar al menos un campo (name, type, planId, startPeriods, consecutivePrefix, logoUrl, services, branches)"
     );
   }
 

@@ -7,6 +7,8 @@ declare global {
       uid?: string;
       /** Token decodificado de la sesión (solo en rutas protegidas). */
       decodedIdToken?: DecodedIdToken;
+      /** businessId resuelto desde el header en rutas privadas. */
+      businessId?: string;
     }
   }
 }

@@ -8,6 +8,7 @@ import type { BusinessMembership } from "../../domain/interfaces/business-member
 import type { Branch } from "../../domain/interfaces/branch.interface";
 import type { Service } from "../../domain/interfaces/service.interface";
 import type { User } from "../../domain/interfaces/user.interface";
+import type { Usage } from "../../domain/interfaces/usage.interface";
 import type { PaginatedResult, PaginationParams } from "../../domain/interfaces/pagination.interface";
 import { MAX_PAGE_SIZE } from "../../domain/interfaces/pagination.interface";
 import { normalizeConsecutivePrefix } from "../../domain/utils/booking-consecutive.utils";
@@ -18,6 +19,8 @@ import type { UpdateBusinessDto } from "../business/dtos/update-business.dto";
 import type { CreateBranchItemDto } from "../branch/dtos/create-branch.dto";
 import type { CreateServiceItemDto } from "../service/dtos/create-service.dto";
 import type { AppointmentStatusTaskScheduler } from "./appointment-status-task-scheduler.service";
+import { BusinessUsageLimitService } from "./business-usage-limit.service";
+import { BusinessUsageService } from "./business-usage.service";
 import type { BranchService } from "./branch.service";
 import FirestoreService from "./firestore.service";
 import type { ServiceService } from "./service.service";
@@ -35,6 +38,7 @@ const ROLES_COLLECTION = "Roles";
 const USERS_COLLECTION = "Users";
 const USER_BUSINESS_MEMBERSHIPS_SUBCOLLECTION = "businessMemberships";
 const ROLE_PERMISSIONS_SUBCOLLECTION = "Permissions";
+const USAGE_SUBCOLLECTION = "usage";
 const ROOT_OWNER_ROLE_ID = "kr3ECTOcAGHnsbvDAr4y";
 const ROOT_SUPER_ADMIN_ID = "WyeIL50oCUFg9PBvB9m9";
 
@@ -77,12 +81,20 @@ interface BusinessDeletionContext {
   users: User[];
 }
 
+type BusinessRecord = Omit<Business, "subscriptionStatus"> & {
+  subscriptionStatus?: Business["subscriptionStatus"];
+  planId?: Business["planId"];
+};
+
 export class BusinessService {
   constructor(
     private readonly serviceService?: ServiceService,
     private readonly branchService?: BranchService,
     private readonly userService?: UserService,
-    private readonly appointmentStatusTaskScheduler?: AppointmentStatusTaskScheduler
+    private readonly appointmentStatusTaskScheduler?: AppointmentStatusTaskScheduler,
+    private readonly businessUsageService: BusinessUsageService = new BusinessUsageService(),
+    private readonly businessUsageLimitService: BusinessUsageLimitService =
+      new BusinessUsageLimitService()
   ) {}
 
   async getAllBusinesses(
@@ -121,9 +133,29 @@ export class BusinessService {
         },
         filters
       );
+      const normalizedBusinesses = result.data.map((business) =>
+        this.normalizeBusiness(business)
+      );
+
+      if (params.id == null || params.id.trim() === "") {
+        return {
+          ...result,
+          data: normalizedBusinesses,
+        };
+      }
+
+      const businessesWithUsage = await Promise.all(
+        normalizedBusinesses.map(async (business) => ({
+          ...business,
+          usage: (await this.businessUsageService.getUsages(business.id)).map((usage) =>
+            this.mapUsageToResponse(usage)
+          ),
+        }))
+      );
+
       return {
         ...result,
-        data: result.data.map((business) => this.normalizeBusiness(business)),
+        data: businessesWithUsage,
       };
     } catch (error) {
       if (error instanceof CustomError) throw error;
@@ -132,7 +164,11 @@ export class BusinessService {
   }
 
   async createBusiness(dto: CreateBusinessDto): Promise<Business> {
+    let createdBusinessId: string | null = null;
+
     try {
+      await this.businessUsageService.ensurePlanExists(dto.planId);
+
       const existing = await FirestoreService.getAll<Business>(COLLECTION_NAME, [
         { field: "status", operator: "in", value: ["ACTIVE", "INACTIVE", "PENDING"] },
       ]);
@@ -157,6 +193,8 @@ export class BusinessService {
       const data = {
         name: dto.name,
         type: dto.type,
+        planId: dto.planId,
+        subscriptionStatus: "INACTIVE" as const,
         slug: dto.slug,
         consecutivePrefix: dto.consecutivePrefix,
         employees: [] as string[],
@@ -165,8 +203,22 @@ export class BusinessService {
         createdAt: FirestoreDataBase.generateTimeStamp(),
       };
       const result = await FirestoreService.create(COLLECTION_NAME, data);
-      return this.normalizeBusiness(result);
+      createdBusinessId = result.id;
+
+      await this.businessUsageService.rebuildBusinessUsage({
+        businessId: result.id,
+        planId: dto.planId,
+        startPeriods: dto.startPeriods,
+      });
+
+      return this.normalizeBusiness(
+        await FirestoreService.getById<BusinessRecord>(COLLECTION_NAME, result.id)
+      );
     } catch (error) {
+      if (createdBusinessId != null) {
+        await this.businessUsageService.deleteBusinessUsage(createdBusinessId).catch(() => undefined);
+        await FirestoreService.delete(COLLECTION_NAME, createdBusinessId).catch(() => undefined);
+      }
       if (error instanceof CustomError) throw error;
       throw CustomError.internalServerError("Error interno del servidor");
     }
@@ -180,6 +232,8 @@ export class BusinessService {
       const business = await this.createBusiness({
         name: dto.name,
         type: dto.type,
+        planId: dto.planId,
+        startPeriods: dto.startPeriods,
         slug: dto.slug,
         consecutivePrefix: dto.consecutivePrefix,
         ...(dto.logoUrl !== undefined && dto.logoUrl !== "" && { logoUrl: dto.logoUrl }),
@@ -214,7 +268,11 @@ export class BusinessService {
 
   async updateBusiness(id: string, dto: UpdateBusinessDto): Promise<Business> {
     try {
-      await FirestoreService.getById<Business>(COLLECTION_NAME, id);
+      const currentBusiness = await FirestoreService.getById<BusinessRecord>(COLLECTION_NAME, id);
+
+      if (dto.planId !== undefined) {
+        await this.businessUsageService.ensurePlanExists(dto.planId);
+      }
 
       if (dto.name !== undefined) {
         const withSameName = await FirestoreService.getAll<Business>(
@@ -262,6 +320,15 @@ export class BusinessService {
 
       await FirestoreService.update(COLLECTION_NAME, id, payload);
 
+      if (dto.planId !== undefined || dto.startPeriods !== undefined) {
+        await this.businessUsageService.rebuildBusinessUsage({
+          businessId: id,
+          planId: dto.planId ?? this.resolveCurrentPlanId(currentBusiness),
+          startPeriods:
+            dto.startPeriods ?? (await this.getExistingStartPeriods(id)),
+        });
+      }
+
       if (dto.services !== undefined) {
         await this.syncServices(id, dto.services);
       }
@@ -274,6 +341,8 @@ export class BusinessService {
       );
     } catch (error) {
       if (error instanceof CustomError) throw error;
+      const detail = error instanceof Error ? error.stack ?? error.message : String(error);
+      logger.error(`[BusinessService] No se pudo actualizar el negocio ${id}. detalle=${detail}`);
       throw CustomError.internalServerError("Error interno del servidor");
     }
   }
@@ -307,6 +376,7 @@ export class BusinessService {
 
       const deletionContext = await this.loadBusinessDeletionContext(id);
       await this.deleteAppointmentStatusTasks(deletionContext.appointmentIds);
+      await this.businessUsageService.deleteBusinessUsage(id);
       await this.deleteDocuments(REVIEWS_COLLECTION, deletionContext.reviewIds);
       await this.deleteDocuments(METRICS_COLLECTION, deletionContext.metricIds);
       await this.deleteUserBusinessMembershipLinks(
@@ -467,6 +537,30 @@ export class BusinessService {
     const storagePrefix = `bussinesses/${businessId}/`;
     const bucket = FirestoreDataBase.getAdmin().storage().bucket();
     await bucket.deleteFiles({ prefix: storagePrefix });
+  }
+
+  private async getExistingStartPeriods(businessId: string): Promise<string[]> {
+    const usages = await this.businessUsageService.getUsages(businessId);
+    if (usages.length === 0) {
+      throw CustomError.badRequest(
+        "No se encontraron períodos de usage actuales para recalcular el negocio"
+      );
+    }
+
+    return usages
+      .map((usage) => usage.startPeriod)
+      .sort((a, b) => a.localeCompare(b));
+  }
+
+  private resolveCurrentPlanId(business: BusinessRecord): string {
+    const planId = business.planId?.trim() ?? "";
+    if (planId === "") {
+      throw CustomError.badRequest(
+        "El negocio actual no tiene un plan asociado para recalcular usage"
+      );
+    }
+
+    return planId;
   }
 
   private async loadBusinessDeletionContext(
@@ -849,32 +943,51 @@ export class BusinessService {
 
       const existing = existingByName.get(nameKey);
       if (existing) {
-        await FirestoreService.update(BRANCHES_COLLECTION, existing.id, {
+        const payload = {
           address: item.address,
           location: item.location,
           phone: item.phone,
           phoneHasWhatsapp: item.phoneHasWhatsapp,
           schedule: item.schedule,
           imageGallery: item.imageGallery,
-          status: "ACTIVE",
+          status: "ACTIVE" as const,
           deletedAt: null,
           updatedAt: FirestoreDataBase.generateTimeStamp(),
-        });
+        };
+        if (existing.status === "DELETED") {
+          await this.businessUsageLimitService.consume(businessId, "branches", 1);
+          try {
+            await FirestoreService.update(BRANCHES_COLLECTION, existing.id, payload);
+          } catch (error) {
+            await this.businessUsageLimitService.release(businessId, "branches", 1).catch(
+              () => undefined
+            );
+            throw error;
+          }
+        } else {
+          await FirestoreService.update(BRANCHES_COLLECTION, existing.id, payload);
+        }
         continue;
       }
 
-      await FirestoreService.create(BRANCHES_COLLECTION, {
-        businessId,
-        name: item.name,
-        address: item.address,
-        location: item.location,
-        phone: item.phone,
-        phoneHasWhatsapp: item.phoneHasWhatsapp,
-        schedule: item.schedule,
-        imageGallery: item.imageGallery,
-        status: "ACTIVE" as const,
-        createdAt: FirestoreDataBase.generateTimeStamp(),
-      });
+      await this.businessUsageLimitService.consume(businessId, "branches", 1);
+      try {
+        await FirestoreService.create(BRANCHES_COLLECTION, {
+          businessId,
+          name: item.name,
+          address: item.address,
+          location: item.location,
+          phone: item.phone,
+          phoneHasWhatsapp: item.phoneHasWhatsapp,
+          schedule: item.schedule,
+          imageGallery: item.imageGallery,
+          status: "ACTIVE" as const,
+          createdAt: FirestoreDataBase.generateTimeStamp(),
+        });
+      } catch (error) {
+        await this.businessUsageLimitService.release(businessId, "branches", 1).catch(() => undefined);
+        throw error;
+      }
     }
 
     const toDelete = existingBranches.filter(
@@ -888,22 +1001,39 @@ export class BusinessService {
         );
       } else {
         await Promise.all(
-          toDelete.map((branch) =>
-            FirestoreService.update(BRANCHES_COLLECTION, branch.id, {
+          toDelete.map(async (branch) => {
+            await FirestoreService.update(BRANCHES_COLLECTION, branch.id, {
               status: "DELETED" as const,
               deletedAt: FirestoreDataBase.generateTimeStamp(),
               updatedAt: FirestoreDataBase.generateTimeStamp(),
-            })
-          )
+            });
+            await this.businessUsageLimitService.release(businessId, "branches", 1);
+          })
         );
       }
     }
   }
 
-  private normalizeBusiness(business: Business): Business {
+  private normalizeBusiness(business: BusinessRecord): Business {
     return {
       ...business,
+      subscriptionStatus: business.subscriptionStatus ?? "ACTIVE",
+      planId: business.planId ?? "",
       consecutivePrefix: normalizeConsecutivePrefix(business.consecutivePrefix),
+    };
+  }
+
+  private mapUsageToResponse(usage: Usage & { id: string }): Usage & { id: string } {
+    return {
+      id: usage.id,
+      maxEmployees: usage.maxEmployees,
+      maxBranches: usage.maxBranches,
+      maxBookings: usage.maxBookings,
+      maxRoles: usage.maxRoles,
+      planId: usage.planId,
+      startPeriod: usage.startPeriod,
+      endPeriod: usage.endPeriod,
+      status: usage.status,
     };
   }
 }

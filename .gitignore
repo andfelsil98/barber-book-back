@@ -118,6 +118,7 @@ ui-debug.log
 firebase-credentials.json
 serviceAccountKey.json
 *.firebaserc.local
+firestore.rules
 
 # Testing
 coverage/

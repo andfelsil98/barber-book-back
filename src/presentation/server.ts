@@ -1,5 +1,12 @@
 import express, { Router } from "express";
-import { authMiddleware, errorHandler, notFoundRoute, rateLimitMiddleware, requestLogger } from "../infrastructure";
+import {
+  authMiddleware,
+  businessIdHeaderMiddleware,
+  errorHandler,
+  notFoundRoute,
+  rateLimitMiddleware,
+  requestLogger,
+} from "../infrastructure";
 import cors from "cors";
 import helmet from "helmet";
 
@@ -27,6 +34,7 @@ export class Server {
     this.app.use(requestLogger);
     this.app.use(rateLimitMiddleware);
     this.app.use(authMiddleware);
+    this.app.use(businessIdHeaderMiddleware);
     this.app.use(this.routes);
     // Not found routes 
     this.app.use(notFoundRoute);

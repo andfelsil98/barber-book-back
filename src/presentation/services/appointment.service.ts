@@ -27,6 +27,7 @@ import { ensureColombiaCountryCode } from "../../domain/utils/string.utils";
 import { ReviewService } from "./review.service";
 import type { AppointmentStatusTaskScheduler } from "./appointment-status-task-scheduler.service";
 import { logger } from "../../infrastructure/logger/logger";
+import { BusinessUsageLimitService } from "./business-usage-limit.service";
 import { MetricService } from "./metric.service";
 import { BookingConsecutiveService } from "./booking-consecutive.service";
 import type { WhatsAppService } from "./whatsapp.service";
@@ -137,7 +138,9 @@ export class AppointmentService {
     private readonly bookingConsecutiveService: BookingConsecutiveService =
       new BookingConsecutiveService(),
     private readonly whatsAppService?: WhatsAppService,
-    private readonly userService: UserService = new UserService()
+    private readonly userService: UserService = new UserService(),
+    private readonly businessUsageLimitService: BusinessUsageLimitService =
+      new BusinessUsageLimitService()
   ) {}
 
   clearValidationCache(): void {
@@ -261,6 +264,7 @@ export class AppointmentService {
   async createAppointment(dto: CreateAppointmentDto): Promise<Appointment> {
     let createdBookingId: string | null = null;
     let createdAppointmentId: string | null = null;
+    let bookingQuotaConsumed = false;
 
     try {
       this.ensureAppointmentDateTimeIsNotPast(dto.date, dto.startTime);
@@ -349,6 +353,8 @@ export class AppointmentService {
         ...(dto.clientPhone !== undefined && { phone: dto.clientPhone }),
         ...(dto.clientEmail !== undefined && { email: dto.clientEmail }),
       });
+      await this.businessUsageLimitService.consume(dto.businessId, "bookings", 1);
+      bookingQuotaConsumed = true;
       const consecutive = await this.bookingConsecutiveService.generateUniqueConsecutive(
         dto.businessId
       );
@@ -445,6 +451,12 @@ export class AppointmentService {
           deletedAt,
           updatedAt: deletedAt,
         }).catch(() => undefined);
+      }
+
+      if (bookingQuotaConsumed) {
+        await this.businessUsageLimitService.release(dto.businessId, "bookings", 1).catch(
+          () => undefined
+        );
       }
 
       if (error instanceof CustomError) throw error;
@@ -836,7 +848,17 @@ export class AppointmentService {
       });
 
       if (opts?.skipBookingSync !== true) {
-        await this.syncBookingStatusFromAppointments(bookingId);
+        const syncResult = await this.syncBookingStatusFromAppointments(bookingId);
+        if (
+          syncResult.nextStatus === "DELETED" &&
+          syncResult.previousStatus !== "DELETED"
+        ) {
+          await this.businessUsageLimitService.release(
+            booking.businessId,
+            "bookings",
+            1
+          );
+        }
         await this.syncBookingRevenueMetricsFromSnapshot(
           booking.id,
           beforeRevenueSnapshot
@@ -1435,7 +1457,10 @@ export class AppointmentService {
     return appointments[0]!;
   }
 
-  private async syncBookingStatusFromAppointments(bookingId: string): Promise<void> {
+  private async syncBookingStatusFromAppointments(bookingId: string): Promise<{
+    previousStatus: BookingStatus;
+    nextStatus: BookingStatus;
+  }> {
     try {
       const [booking, appointments] = await Promise.all([
         FirestoreService.getById<Booking>(BOOKINGS_COLLECTION, bookingId),
@@ -1444,7 +1469,12 @@ export class AppointmentService {
         ]),
       ]);
 
-      if (appointments.length === 0) return;
+      if (appointments.length === 0) {
+        return {
+          previousStatus: booking.status,
+          nextStatus: booking.status,
+        };
+      }
 
       const now = FirestoreDataBase.generateTimeStamp();
       const nextTotalAmount = await this.calculateBookingTotalPrice(
@@ -1463,7 +1493,9 @@ export class AppointmentService {
       };
 
       const bookingStatus = this.resolveBookingStatusFromAppointments(appointments);
+      let nextStatus = booking.status;
       if (bookingStatus != null) {
+        nextStatus = bookingStatus;
         payload.status = bookingStatus;
         if (bookingStatus === "CANCELLED") {
           if (booking.status !== "CANCELLED") {
@@ -1482,8 +1514,17 @@ export class AppointmentService {
       }
 
       await FirestoreService.update(BOOKINGS_COLLECTION, bookingId, payload);
+      return {
+        previousStatus: booking.status,
+        nextStatus,
+      };
     } catch (error) {
-      if (error instanceof CustomError && error.statusCode === 404) return;
+      if (error instanceof CustomError && error.statusCode === 404) {
+        return {
+          previousStatus: "DELETED",
+          nextStatus: "DELETED",
+        };
+      }
       throw error;
     }
   }
