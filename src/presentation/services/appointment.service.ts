@@ -32,6 +32,7 @@ import { MetricService } from "./metric.service";
 import { BookingConsecutiveService } from "./booking-consecutive.service";
 import type { WhatsAppService } from "./whatsapp.service";
 import { UserService } from "./user.service";
+import type { PushNotificationService } from "./push-notification.service";
 
 const COLLECTION_NAME = "Appointments";
 const BOOKINGS_COLLECTION = "Bookings";
@@ -138,6 +139,7 @@ export class AppointmentService {
     private readonly bookingConsecutiveService: BookingConsecutiveService =
       new BookingConsecutiveService(),
     private readonly whatsAppService?: WhatsAppService,
+    private readonly pushNotificationService?: PushNotificationService,
     private readonly userService: UserService = new UserService(),
     private readonly businessUsageLimitService: BusinessUsageLimitService =
       new BusinessUsageLimitService()
@@ -432,6 +434,34 @@ export class AppointmentService {
           `[AppointmentService] No se pudo enviar WhatsApp de confirmación para booking ${createdBooking.id}. detalle=${detail}`
         );
       });
+
+      await this.pushNotificationService
+        ?.notifyBookingCreated({
+          businessId: dto.businessId,
+          branchId: dto.branchId,
+          bookingId: createdBooking.id,
+          bookingConsecutive: consecutive,
+          clientDocument: dto.clientId,
+          employeeIds: [createdAppointment.employeeId],
+          appointments: [
+            {
+              date: createdAppointment.date,
+              startTime: createdAppointment.startTime,
+            },
+          ],
+        })
+        .catch((pushNotificationError) => {
+          const detail =
+            pushNotificationError instanceof Error
+              ? pushNotificationError.message
+              : typeof pushNotificationError === "string"
+                ? pushNotificationError
+                : JSON.stringify(pushNotificationError);
+
+          logger.warn(
+            `[AppointmentService] No se pudo enviar notificación push para booking ${createdBooking.id}. detalle=${detail}`
+          );
+        });
 
       return createdAppointment;
     } catch (error) {
@@ -1616,7 +1646,13 @@ export class AppointmentService {
       );
     }
 
-    if (appointmentDateTime.getTime() < Date.now()) {
+    // Interpretar la fecha/hora del agendamiento como hora de Colombia (UTC-5, sin DST).
+    // Convertirla a UTC para comparar correctamente sin depender del timezone del servidor.
+    const BOGOTA_OFFSET_MS = 5 * 60 * 60 * 1000; // UTC-5
+    const ONE_MINUTE_MS = 60 * 1000;
+    const apptUtcMs = Date.UTC(year, month - 1, day, hours, minutes) + BOGOTA_OFFSET_MS;
+
+    if (apptUtcMs <= Date.now() + ONE_MINUTE_MS) {
       throw CustomError.badRequest(
         "La fecha y hora de la cita no pueden ser anteriores al momento actual"
       );

@@ -4,16 +4,16 @@
  * y no se valida el header Authorization.
  * El resto de rutas exigen: Authorization: Bearer <idToken> (token de sesión Firebase).
  *
- * Ejemplo: si agregas "/api/health", entonces GET /api/health y GET /api/health/ready son públicas.
+ * Ejemplo: si agregas "/health", entonces GET /health y GET /health/ready son públicas.
  */
 export const PUBLIC_ROUTE_PREFIXES: string[] = [
-  "/api/auth",
-  "/api/branches",
-  "/api/services",
-  "/api/appointments",
-  "/api/modules",
-  "/api/permissions",
-  "/api/roles"
+  "/auth",
+  "/branches",
+  "/services",
+  "/appointments",
+  "/modules",
+  "/permissions",
+  "/roles"
 ];
 
 /**
@@ -25,17 +25,17 @@ export const PUBLIC_ROUTE_METHOD_PATHS: Array<{
   path: string;
   match?: "exact" | "prefix";
 }> = [
-  { method: "GET", path: "/api/business" },
-  { method: "GET", path: "/api/business-memberships" },
-  { method: "GET", path: "/api/users" },
-  { method: "GET", path: "/api/reviews" },
-  { method: "GET", path: "/api/bookings", match: "prefix" },
-  { method: "POST", path: "/api/reviews" },
-  { method: "POST", path: "/api/bookings" },
-  { method: "PUT", path: "/api/bookings", match: "prefix" },
-  { method: "POST", path: "/api/whatsapp/send-message", match: "prefix" },
-  { method: "POST", path: "/api/business/usage/reconcile-today" },
-  { method: "GET", path: "/api/plans" },
+  { method: "GET", path: "/business" },
+  { method: "GET", path: "/business-memberships" },
+  { method: "GET", path: "/users" },
+  { method: "GET", path: "/reviews" },
+  { method: "GET", path: "/bookings", match: "prefix" },
+  { method: "POST", path: "/reviews" },
+  { method: "POST", path: "/bookings" },
+  { method: "PUT", path: "/bookings", match: "prefix" },
+  { method: "POST", path: "/whatsapp/send-message", match: "prefix" },
+  { method: "POST", path: "/business/usage/reconcile-today" },
+  { method: "GET", path: "/plans" },
 ];
 
 /**
@@ -47,12 +47,14 @@ export const BUSINESS_ID_HEADER_EXEMPT_METHOD_PATHS: Array<{
   path: string;
   match?: "exact" | "prefix";
 }> = [
-  { method: "POST", path: "/api/business" },
-  { method: "POST", path: "/api/business-memberships/create-by-document" },
-  { method: "PUT", path: "/api/business", match: "prefix" },
-  { method: "PATCH", path: "/api/business", match: "prefix" },
-  { method: "DELETE", path: "/api/business", match: "prefix" },
-  { method: "POST", path: "/api/plans" },
-  { method: "PUT", path: "/api/plans", match: "prefix" },
-  { method: "DELETE", path: "/api/plans", match: "prefix" },
+  { method: "POST", path: "/business" },
+  { method: "POST", path: "/business-memberships/create-by-document" },
+  { method: "PUT", path: "/business", match: "prefix" },
+  { method: "PATCH", path: "/business", match: "prefix" },
+  { method: "DELETE", path: "/business", match: "prefix" },
+  { method: "POST", path: "/plans" },
+  { method: "PUT", path: "/plans", match: "prefix" },
+  { method: "DELETE", path: "/plans", match: "prefix" },
+  { method: "POST", path: "/push-notifications", match: "prefix" },
+  { method: "DELETE", path: "/push-notifications", match: "prefix" },
 ];
