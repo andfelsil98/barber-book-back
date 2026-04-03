@@ -90,6 +90,18 @@ interface RevenueMetricContext {
   date: string;
 }
 
+interface RevenueMetricContribution {
+  context: RevenueMetricContext;
+  revenue: number;
+  paidCompletedAppointments: number;
+}
+
+interface RevenueMetricSyncDelta {
+  revenueDelta: number;
+  paidCompletedRevenueDelta: number;
+  paidCompletedAppointmentsDelta: number;
+}
+
 export interface CreateAppointmentForBookingData {
   bookingId: string;
   date: string;
@@ -445,6 +457,7 @@ export class AppointmentService {
           employeeIds: [createdAppointment.employeeId],
           appointments: [
             {
+              id: createdAppointment.id,
               date: createdAppointment.date,
               startTime: createdAppointment.startTime,
             },
@@ -1004,30 +1017,53 @@ export class AppointmentService {
   ): Promise<void> {
     const afterSnapshot = await this.captureBookingRevenueSnapshot(bookingId);
 
-    const [beforeContributions, afterContributions] = await Promise.all([
+    const [
+      beforeContributions,
+      afterContributions,
+      beforePaidCompletedContributions,
+      afterPaidCompletedContributions,
+    ] = await Promise.all([
       this.buildRevenueContributionsByAppointment(beforeSnapshot),
       this.buildRevenueContributionsByAppointment(afterSnapshot),
+      this.buildRevenueContributionsByAppointment(beforeSnapshot, {
+        eligibleStatuses: ["FINISHED"],
+        countPaidCompletedAppointments: true,
+      }),
+      this.buildRevenueContributionsByAppointment(afterSnapshot, {
+        eligibleStatuses: ["FINISHED"],
+        countPaidCompletedAppointments: true,
+      }),
     ]);
 
     const deltasByContext = new Map<
       string,
-      { context: RevenueMetricContext; revenueDelta: number }
+      { context: RevenueMetricContext; delta: RevenueMetricSyncDelta }
     >();
 
     const appointmentIds = new Set<string>([
       ...beforeContributions.keys(),
       ...afterContributions.keys(),
+      ...beforePaidCompletedContributions.keys(),
+      ...afterPaidCompletedContributions.keys(),
     ]);
 
     for (const appointmentId of appointmentIds) {
       const beforeContribution = beforeContributions.get(appointmentId);
       const afterContribution = afterContributions.get(appointmentId);
+      const beforePaidCompletedContribution =
+        beforePaidCompletedContributions.get(appointmentId);
+      const afterPaidCompletedContribution =
+        afterPaidCompletedContributions.get(appointmentId);
 
       if (beforeContribution != null) {
         this.accumulateRevenueMetricDelta(
           deltasByContext,
           beforeContribution.context,
-          -beforeContribution.revenue
+          {
+            revenueDelta: -beforeContribution.revenue,
+            paidCompletedRevenueDelta: 0,
+            paidCompletedAppointmentsDelta: 0,
+          }
         );
       }
 
@@ -1035,36 +1071,85 @@ export class AppointmentService {
         this.accumulateRevenueMetricDelta(
           deltasByContext,
           afterContribution.context,
-          afterContribution.revenue
+          {
+            revenueDelta: afterContribution.revenue,
+            paidCompletedRevenueDelta: 0,
+            paidCompletedAppointmentsDelta: 0,
+          }
+        );
+      }
+
+      if (beforePaidCompletedContribution != null) {
+        this.accumulateRevenueMetricDelta(
+          deltasByContext,
+          beforePaidCompletedContribution.context,
+          {
+            revenueDelta: 0,
+            paidCompletedRevenueDelta: -beforePaidCompletedContribution.revenue,
+            paidCompletedAppointmentsDelta:
+              -beforePaidCompletedContribution.paidCompletedAppointments,
+          }
+        );
+      }
+
+      if (afterPaidCompletedContribution != null) {
+        this.accumulateRevenueMetricDelta(
+          deltasByContext,
+          afterPaidCompletedContribution.context,
+          {
+            revenueDelta: 0,
+            paidCompletedRevenueDelta: afterPaidCompletedContribution.revenue,
+            paidCompletedAppointmentsDelta:
+              afterPaidCompletedContribution.paidCompletedAppointments,
+          }
         );
       }
     }
 
-    for (const { context, revenueDelta } of deltasByContext.values()) {
-      const normalizedDelta = this.roundMoney(revenueDelta);
-      if (normalizedDelta === 0) continue;
+    for (const { context, delta } of deltasByContext.values()) {
+      const revenueDelta = this.roundMoney(delta.revenueDelta);
+      const paidCompletedRevenueDelta = this.roundMoney(
+        delta.paidCompletedRevenueDelta
+      );
+      const paidCompletedAppointmentsDelta = delta.paidCompletedAppointmentsDelta;
+      if (
+        revenueDelta === 0 &&
+        paidCompletedRevenueDelta === 0 &&
+        paidCompletedAppointmentsDelta === 0
+      ) {
+        continue;
+      }
 
       await this.metricService.applyAppointmentMetricDelta({
         businessId: context.businessId,
         branchId: context.branchId,
         employeeId: context.employeeId,
         date: context.date,
-        revenueDelta: normalizedDelta,
+        revenueDelta,
+        paidCompletedRevenueDelta,
+        paidCompletedAppointmentsDelta,
       });
     }
   }
 
   private async buildRevenueContributionsByAppointment(
-    snapshot: BookingRevenueSnapshot | null
-  ): Promise<Map<string, { context: RevenueMetricContext; revenue: number }>> {
-    const contributions = new Map<
-      string,
-      { context: RevenueMetricContext; revenue: number }
-    >();
+    snapshot: BookingRevenueSnapshot | null,
+    options?: {
+      eligibleStatuses?: AppointmentStatus[];
+      countPaidCompletedAppointments?: boolean;
+    }
+  ): Promise<Map<string, RevenueMetricContribution>> {
+    const contributions = new Map<string, RevenueMetricContribution>();
 
     if (snapshot == null || snapshot.paidAmount <= 0 || snapshot.appointments.length === 0) {
       return contributions;
     }
+
+    const eligibleStatuses = new Set<AppointmentStatus>(
+      options?.eligibleStatuses ?? ["CREATED", "IN_PROGRESS", "FINISHED"]
+    );
+    const shouldCountPaidCompletedAppointments =
+      options?.countPaidCompletedAppointments === true;
 
     const services = await FirestoreService.getAll<Service>(SERVICES_COLLECTION, [
       { field: "businessId", operator: "==", value: snapshot.businessId },
@@ -1074,7 +1159,7 @@ export class AppointmentService {
     );
 
     const activeAppointments = snapshot.appointments
-      .filter((appointment) => this.isRevenueBookingStatus(appointment.status))
+      .filter((appointment) => eligibleStatuses.has(appointment.status))
       .map((appointment) => ({
         appointment,
         price: servicePricesById.get(appointment.serviceId.trim()) ?? 0,
@@ -1128,6 +1213,7 @@ export class AppointmentService {
           date: item.appointment.date,
         },
         revenue: normalizedRevenue,
+        paidCompletedAppointments: shouldCountPaidCompletedAppointments ? 1 : 0,
       });
     });
 
@@ -1137,10 +1223,10 @@ export class AppointmentService {
   private accumulateRevenueMetricDelta(
     deltasByContext: Map<
       string,
-      { context: RevenueMetricContext; revenueDelta: number }
+      { context: RevenueMetricContext; delta: RevenueMetricSyncDelta }
     >,
     context: RevenueMetricContext,
-    revenueDelta: number
+    delta: RevenueMetricSyncDelta
   ): void {
     const key = [
       context.businessId.trim(),
@@ -1153,12 +1239,14 @@ export class AppointmentService {
     if (existing == null) {
       deltasByContext.set(key, {
         context,
-        revenueDelta,
+        delta: { ...delta },
       });
       return;
     }
 
-    existing.revenueDelta += revenueDelta;
+    existing.delta.revenueDelta += delta.revenueDelta;
+    existing.delta.paidCompletedRevenueDelta += delta.paidCompletedRevenueDelta;
+    existing.delta.paidCompletedAppointmentsDelta += delta.paidCompletedAppointmentsDelta;
   }
 
   private async applyAppointmentMetricTransition(
@@ -1899,6 +1987,10 @@ export class AppointmentService {
 
     const booking = await FirestoreService.getById<Booking>(BOOKINGS_COLLECTION, bookingId);
     const bookingPaymentStatus = this.resolveBookingPaymentStatusFromBooking(booking);
+    const beforeRevenueSnapshot =
+      opts?.skipBookingSync === true
+        ? null
+        : await this.captureBookingRevenueSnapshot(booking.id);
     const servicePrice = await this.getServicePriceById(
       mapped.serviceId,
       booking.businessId
@@ -1924,6 +2016,10 @@ export class AppointmentService {
 
     if (opts?.skipBookingSync !== true) {
       await this.syncBookingStatusFromAppointments(bookingId);
+      await this.syncBookingRevenueMetricsFromSnapshot(
+        booking.id,
+        beforeRevenueSnapshot
+      );
     }
 
     await this.applyAppointmentMetricTransition(
@@ -2292,14 +2388,6 @@ export class AppointmentService {
         updatedAt: appointment.updatedAt,
       }),
     };
-  }
-
-  private isRevenueBookingStatus(status: AppointmentStatus): boolean {
-    return (
-      status === "CREATED" ||
-      status === "IN_PROGRESS" ||
-      status === "FINISHED"
-    );
   }
 
   private roundMoney(value: number): number {

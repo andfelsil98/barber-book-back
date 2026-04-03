@@ -22,8 +22,10 @@ const COLLECTION_NAME = "Metrics";
 
 interface MetricDeltas {
   revenueDelta: number;
+  paidCompletedRevenueDelta: number;
   appointmentsDelta: number;
   completedAppointmentsDelta: number;
+  paidCompletedAppointmentsDelta: number;
   cancelledAppointmentsDelta: number;
 }
 
@@ -42,8 +44,10 @@ export interface ApplyAppointmentMetricDeltaInput {
   employeeId: string;
   date: string;
   revenueDelta?: number;
+  paidCompletedRevenueDelta?: number;
   appointmentsDelta?: number;
   completedAppointmentsDelta?: number;
+  paidCompletedAppointmentsDelta?: number;
   cancelledAppointmentsDelta?: number;
 }
 
@@ -61,8 +65,10 @@ export interface GetMetricInsightsInput {
 
 interface MetricTotals {
   revenue: number;
+  paidCompletedRevenue: number;
   appointments: number;
   completedAppointments: number;
+  paidCompletedAppointments: number;
   cancelledAppointments: number;
 }
 
@@ -142,9 +148,9 @@ export class MetricService {
 
       if (metricType === METRIC_TYPES.AVERAGE_TICKET) {
         const value =
-          totals.completedAppointments <= 0
+          totals.paidCompletedAppointments <= 0
             ? 0
-            : totals.revenue / totals.completedAppointments;
+            : totals.paidCompletedRevenue / totals.paidCompletedAppointments;
         metrics.push({ type: metricType, value });
         continue;
       }
@@ -295,8 +301,12 @@ export class MetricService {
     const month = date.slice(0, 7);
     const deltas: MetricDeltas = {
       revenueDelta: this.normalizeDelta(input.revenueDelta),
+      paidCompletedRevenueDelta: this.normalizeDelta(input.paidCompletedRevenueDelta),
       appointmentsDelta: this.normalizeDelta(input.appointmentsDelta),
       completedAppointmentsDelta: this.normalizeDelta(input.completedAppointmentsDelta),
+      paidCompletedAppointmentsDelta: this.normalizeDelta(
+        input.paidCompletedAppointmentsDelta
+      ),
       cancelledAppointmentsDelta: this.normalizeDelta(input.cancelledAppointmentsDelta),
     };
 
@@ -386,8 +396,12 @@ export class MetricService {
         ...(identity.date != null && { date: identity.date }),
         ...(identity.month != null && { month: identity.month }),
         revenue: this.toNonNegative(deltas.revenueDelta),
+        paidCompletedRevenue: this.toNonNegative(deltas.paidCompletedRevenueDelta),
         appointments: this.toNonNegative(deltas.appointmentsDelta),
         completedAppointments: this.toNonNegative(deltas.completedAppointmentsDelta),
+        paidCompletedAppointments: this.toNonNegative(
+          deltas.paidCompletedAppointmentsDelta
+        ),
         cancelledAppointments: this.toNonNegative(deltas.cancelledAppointmentsDelta),
         createdAt: FirestoreDataBase.generateTimeStamp(),
       });
@@ -414,11 +428,18 @@ export class MetricService {
       ...cleanupByType,
       timeFrame,
       revenue: this.toNonNegative((existingMetric.revenue ?? 0) + deltas.revenueDelta),
+      paidCompletedRevenue: this.toNonNegative(
+        (existingMetric.paidCompletedRevenue ?? 0) + deltas.paidCompletedRevenueDelta
+      ),
       appointments: this.toNonNegative(
         (existingMetric.appointments ?? 0) + deltas.appointmentsDelta
       ),
       completedAppointments: this.toNonNegative(
         (existingMetric.completedAppointments ?? 0) + deltas.completedAppointmentsDelta
+      ),
+      paidCompletedAppointments: this.toNonNegative(
+        (existingMetric.paidCompletedAppointments ?? 0) +
+          deltas.paidCompletedAppointmentsDelta
       ),
       cancelledAppointments: this.toNonNegative(
         (existingMetric.cancelledAppointments ?? 0) + deltas.cancelledAppointmentsDelta
@@ -513,10 +534,19 @@ export class MetricService {
   private computeTotals(metrics: Metric[]): MetricTotals {
     return metrics.reduce<MetricTotals>(
       (acc, metric) => {
+        const paidCompletedRevenue = metric.paidCompletedRevenue ?? 0;
+        const paidCompletedAppointments = metric.paidCompletedAppointments ?? 0;
+
         acc.revenue += Number.isFinite(metric.revenue) ? metric.revenue : 0;
+        acc.paidCompletedRevenue += Number.isFinite(paidCompletedRevenue)
+          ? paidCompletedRevenue
+          : 0;
         acc.appointments += Number.isFinite(metric.appointments) ? metric.appointments : 0;
         acc.completedAppointments += Number.isFinite(metric.completedAppointments)
           ? metric.completedAppointments
+          : 0;
+        acc.paidCompletedAppointments += Number.isFinite(paidCompletedAppointments)
+          ? paidCompletedAppointments
           : 0;
         acc.cancelledAppointments += Number.isFinite(metric.cancelledAppointments)
           ? metric.cancelledAppointments
@@ -525,8 +555,10 @@ export class MetricService {
       },
       {
         revenue: 0,
+        paidCompletedRevenue: 0,
         appointments: 0,
         completedAppointments: 0,
+        paidCompletedAppointments: 0,
         cancelledAppointments: 0,
       }
     );
@@ -688,8 +720,10 @@ export class MetricService {
   private isZeroDelta(deltas: MetricDeltas): boolean {
     return (
       deltas.revenueDelta === 0 &&
+      deltas.paidCompletedRevenueDelta === 0 &&
       deltas.appointmentsDelta === 0 &&
       deltas.completedAppointmentsDelta === 0 &&
+      deltas.paidCompletedAppointmentsDelta === 0 &&
       deltas.cancelledAppointmentsDelta === 0
     );
   }

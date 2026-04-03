@@ -281,6 +281,7 @@ export class BookingService {
           clientDocument: dto.clientId,
           employeeIds: createdAppointments.map((appointment) => appointment.employeeId),
           appointments: createdAppointments.map((appointment) => ({
+            id: appointment.id,
             date: appointment.date,
             startTime: appointment.startTime,
           })),
@@ -667,6 +668,7 @@ export class BookingService {
               (appointment) => appointment.employeeId
             ),
             appointments: cancellationNotificationAppointments.map((appointment) => ({
+              id: appointment.id,
               date: appointment.date,
               startTime: appointment.startTime,
             })),

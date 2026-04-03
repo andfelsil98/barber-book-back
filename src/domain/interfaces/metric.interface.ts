@@ -11,8 +11,10 @@ export interface Metric {
   date?: string;
   month?: string;
   revenue: number;
+  paidCompletedRevenue?: number;
   appointments: number;
   completedAppointments: number;
+  paidCompletedAppointments?: number;
   cancelledAppointments: number;
   createdAt: string;
   updatedAt?: string;

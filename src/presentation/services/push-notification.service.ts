@@ -34,6 +34,7 @@ interface NotifyBookingNotificationParams {
   clientDocument: string;
   employeeIds: string[];
   appointments: Array<{
+    id: string;
     date: string;
     startTime: string;
   }>;
@@ -394,22 +395,25 @@ export class PushNotificationService {
       params.appointments.length === 1
         ? `${clientName} creó el agendamiento ${bookingConsecutive} para ${firstAppointmentLabel}.`
         : `${clientName} creó el agendamiento ${bookingConsecutive}. Revisa el detalle para ver las citas programadas.`;
+    const targetUrl = this.resolveBookingNotificationTargetUrl(params);
+    const singleAppointmentId = this.resolveSingleAppointmentId(params);
 
     return {
       title: `${businessName}: nuevo agendamiento`,
       body,
-      url: `/admin/booking/${params.bookingId}`,
+      url: targetUrl,
       tag: `booking-created-${params.bookingId}`,
       data: {
         title: `${businessName}: nuevo agendamiento`,
         body,
-        url: `/admin/booking/${params.bookingId}`,
+        url: targetUrl,
         tag: `booking-created-${params.bookingId}`,
         notificationType: "BOOKING_CREATED",
         bookingId: params.bookingId,
         businessId: params.businessId,
         branchId: params.branchId,
         bookingConsecutive,
+        ...(singleAppointmentId !== "" && { appointmentId: singleAppointmentId }),
       },
     };
   }
@@ -440,24 +444,48 @@ export class PushNotificationService {
       params.appointments.length === 1
         ? `${clientName} canceló el agendamiento ${bookingConsecutive} programado para ${firstAppointmentLabel}.`
         : `${clientName} canceló el agendamiento ${bookingConsecutive}. Revisa el detalle para ver las citas afectadas.`;
+    const targetUrl = this.resolveBookingNotificationTargetUrl(params);
+    const singleAppointmentId = this.resolveSingleAppointmentId(params);
 
     return {
       title: `${businessName}: agendamiento cancelado`,
       body,
-      url: `/admin/booking/${params.bookingId}`,
+      url: targetUrl,
       tag: `booking-cancelled-${params.bookingId}`,
       data: {
         title: `${businessName}: agendamiento cancelado`,
         body,
-        url: `/admin/booking/${params.bookingId}`,
+        url: targetUrl,
         tag: `booking-cancelled-${params.bookingId}`,
         notificationType: "BOOKING_CANCELLED",
         bookingId: params.bookingId,
         businessId: params.businessId,
         branchId: params.branchId,
         bookingConsecutive,
+        ...(singleAppointmentId !== "" && { appointmentId: singleAppointmentId }),
       },
     };
+  }
+
+  private resolveSingleAppointmentId(
+    params: NotifyBookingNotificationParams
+  ): string {
+    if (params.appointments.length !== 1) return "";
+
+    return params.appointments[0]?.id?.trim() ?? "";
+  }
+
+  private resolveBookingNotificationTargetUrl(
+    params: NotifyBookingNotificationParams
+  ): string {
+    const singleAppointmentId = this.resolveSingleAppointmentId(params);
+    if (singleAppointmentId !== "") {
+      return `/admin/appointments?appointmentId=${encodeURIComponent(
+        singleAppointmentId
+      )}`;
+    }
+
+    return `/admin/booking/${params.bookingId}`;
   }
 
   private async sendToRecipients(
