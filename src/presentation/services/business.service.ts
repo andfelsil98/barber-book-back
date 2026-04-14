@@ -1,4 +1,5 @@
 import { FirestoreDataBase } from "../../data/firestore/firestore.database";
+import { randomInt } from "node:crypto";
 import {
   DEFAULT_CROSS_BUSINESS_ADMIN_ROLE_NAME,
   type AccessEntityType,
@@ -18,6 +19,7 @@ import type { Usage } from "../../domain/interfaces/usage.interface";
 import type { PaginatedResult, PaginationParams } from "../../domain/interfaces/pagination.interface";
 import { MAX_PAGE_SIZE } from "../../domain/interfaces/pagination.interface";
 import { normalizeConsecutivePrefix } from "../../domain/utils/booking-consecutive.utils";
+import { slugFromName } from "../../domain/utils/string.utils";
 import { logger } from "../../infrastructure/logger/logger";
 import type { CreateBusinessDto } from "../business/dtos/create-business.dto";
 import type { CreateBusinessCompleteDto } from "../business/dtos/create-business-complete.dto";
@@ -42,14 +44,19 @@ const METRICS_COLLECTION = "Metrics";
 const REVIEWS_COLLECTION = "Reviews";
 const ROLES_COLLECTION = "Roles";
 const USERS_COLLECTION = "Users";
+const BUSINESS_SLUGS_COLLECTION = "BusinessSlugs";
 const USER_BUSINESS_MEMBERSHIPS_SUBCOLLECTION = "businessMemberships";
 const ROLE_PERMISSIONS_SUBCOLLECTION = "Permissions";
 const USAGE_SUBCOLLECTION = "usage";
 const PERMISSIONS_COLLECTION = "Permissions";
+const BUSINESS_SLUG_SUFFIX_LENGTH = 4;
+const MAX_BUSINESS_SLUG_ATTEMPTS = 25;
 
 function toNameKey(value: string): string {
   return value.trim().toLowerCase();
 }
+
+class BusinessSlugAlreadyReservedError extends Error {}
 
 function normalizeUniqueStrings(values: Array<string | null | undefined>): string[] {
   return Array.from(
@@ -170,18 +177,11 @@ export class BusinessService {
 
   async createBusiness(dto: CreateBusinessDto): Promise<Business> {
     let createdBusinessId: string | null = null;
+    let createdBusinessSlug: string | null = null;
 
     try {
       await this.businessUsageService.ensurePlanExists(dto.planId);
 
-      const existing = await FirestoreService.getAll<Business>(COLLECTION_NAME, [
-        { field: "status", operator: "in", value: ["ACTIVE", "INACTIVE", "PENDING"] },
-      ]);
-      const incomingNameKey = toNameKey(dto.name);
-      const duplicated = existing.some((business) => toNameKey(business.name) === incomingNameKey);
-      if (duplicated) {
-        throw CustomError.conflict("Ya existe un negocio con este nombre");
-      }
       const businessWithSameConsecutivePrefix = await FirestoreService.getAll<Business>(
         COLLECTION_NAME,
         [
@@ -195,34 +195,26 @@ export class BusinessService {
       if (businessWithSameConsecutivePrefix.length > 0) {
         throw CustomError.conflict("Ya existe un negocio con este consecutivePrefix");
       }
-      const data = {
-        name: dto.name,
-        type: dto.type,
-        planId: dto.planId,
-        subscriptionStatus: "INACTIVE" as const,
-        slug: dto.slug,
-        consecutivePrefix: dto.consecutivePrefix,
-        employees: [] as string[],
-        logoUrl: dto.logoUrl ?? "",
-        status: "ACTIVE" as const,
-        createdAt: FirestoreDataBase.generateTimeStamp(),
-      };
-      const result = await FirestoreService.create(COLLECTION_NAME, data);
-      createdBusinessId = result.id;
+      const createdBusiness = await this.createBusinessWithReservedSlug(dto);
+      createdBusinessId = createdBusiness.id;
+      createdBusinessSlug = createdBusiness.slug;
 
       await this.businessUsageService.rebuildBusinessUsage({
-        businessId: result.id,
+        businessId: createdBusiness.id,
         planId: dto.planId,
         startPeriods: dto.startPeriods,
       });
 
       return this.normalizeBusiness(
-        await FirestoreService.getById<BusinessRecord>(COLLECTION_NAME, result.id)
+        await FirestoreService.getById<BusinessRecord>(COLLECTION_NAME, createdBusiness.id)
       );
     } catch (error) {
       if (createdBusinessId != null) {
         await this.businessUsageService.deleteBusinessUsage(createdBusinessId).catch(() => undefined);
         await FirestoreService.delete(COLLECTION_NAME, createdBusinessId).catch(() => undefined);
+      }
+      if (createdBusinessSlug != null) {
+        await this.releaseBusinessSlug(createdBusinessSlug).catch(() => undefined);
       }
       if (error instanceof CustomError) throw error;
       throw CustomError.internalServerError("Error interno del servidor");
@@ -239,7 +231,6 @@ export class BusinessService {
         type: dto.type,
         planId: dto.planId,
         startPeriods: dto.startPeriods,
-        slug: dto.slug,
         consecutivePrefix: dto.consecutivePrefix,
         ...(dto.logoUrl !== undefined && dto.logoUrl !== "" && { logoUrl: dto.logoUrl }),
       });
@@ -261,19 +252,6 @@ export class BusinessService {
         await this.businessUsageService.ensurePlanExists(dto.planId);
       }
 
-      if (dto.name !== undefined) {
-        const withSameName = await FirestoreService.getAll<Business>(
-          COLLECTION_NAME,
-          [{ field: "status", operator: "in", value: ["ACTIVE", "INACTIVE", "PENDING"] }]
-        );
-        const incomingNameKey = toNameKey(dto.name);
-        const otherWithSameName = withSameName.filter(
-          (b) => b.id !== id && toNameKey(b.name) === incomingNameKey
-        );
-        if (otherWithSameName.length > 0) {
-          throw CustomError.conflict("Ya existe un negocio con este nombre");
-        }
-      }
       if (dto.consecutivePrefix !== undefined) {
         const businessesWithSameConsecutivePrefix = await FirestoreService.getAll<Business>(
           COLLECTION_NAME,
@@ -297,13 +275,11 @@ export class BusinessService {
       const payload: Record<string, unknown> = {
         updatedAt: FirestoreDataBase.generateTimeStamp(),
       };
-      if (dto.name !== undefined) payload.name = dto.name;
       if (dto.type !== undefined) payload.type = dto.type;
       if (dto.consecutivePrefix !== undefined) {
         payload.consecutivePrefix = dto.consecutivePrefix;
       }
       if (dto.logoUrl !== undefined) payload.logoUrl = dto.logoUrl;
-      if (dto.slug !== undefined) payload.slug = dto.slug;
 
       await FirestoreService.update(COLLECTION_NAME, id, payload);
 
@@ -433,6 +409,93 @@ export class BusinessService {
       if (error instanceof CustomError) throw error;
       throw CustomError.internalServerError("Error interno del servidor");
     }
+  }
+
+  private async createBusinessWithReservedSlug(
+    dto: CreateBusinessDto
+  ): Promise<{ id: string; slug: string }> {
+    const db = FirestoreDataBase.getDB();
+    const baseSlug = slugFromName(dto.name);
+    if (baseSlug === "") {
+      throw CustomError.badRequest(
+        "No fue posible generar un identificador válido para el negocio"
+      );
+    }
+
+    const businessRef = db.collection(COLLECTION_NAME).doc();
+
+    for (let attempt = 0; attempt < MAX_BUSINESS_SLUG_ATTEMPTS; attempt += 1) {
+      const candidateSlug =
+        attempt === 0
+          ? baseSlug
+          : `${baseSlug}-${this.generateBusinessSlugSuffix(BUSINESS_SLUG_SUFFIX_LENGTH)}`;
+      const slugReservationRef = db
+        .collection(BUSINESS_SLUGS_COLLECTION)
+        .doc(candidateSlug);
+
+      try {
+        await db.runTransaction(async (transaction) => {
+          const reservationSnapshot = await transaction.get(slugReservationRef);
+          if (reservationSnapshot.exists) {
+            throw new BusinessSlugAlreadyReservedError(candidateSlug);
+          }
+
+          const createdAt = FirestoreDataBase.generateTimeStamp();
+          transaction.set(businessRef, {
+            id: businessRef.id,
+            name: dto.name,
+            type: dto.type,
+            planId: dto.planId,
+            subscriptionStatus: "INACTIVE" as const,
+            slug: candidateSlug,
+            consecutivePrefix: dto.consecutivePrefix,
+            employees: [] as string[],
+            logoUrl: dto.logoUrl ?? "",
+            status: "ACTIVE" as const,
+            createdAt,
+          });
+          transaction.set(slugReservationRef, {
+            id: candidateSlug,
+            slug: candidateSlug,
+            baseSlug,
+            businessId: businessRef.id,
+            createdAt,
+          });
+        });
+
+        return {
+          id: businessRef.id,
+          slug: candidateSlug,
+        };
+      } catch (error) {
+        if (error instanceof BusinessSlugAlreadyReservedError) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw CustomError.conflict(
+      "No fue posible generar un identificador único para el negocio"
+    );
+  }
+
+  private generateBusinessSlugSuffix(length: number): string {
+    const characters = "abcdefghijklmnopqrstuvwxyz0123456789";
+    let suffix = "";
+
+    for (let index = 0; index < length; index += 1) {
+      suffix += characters[randomInt(0, characters.length)];
+    }
+
+    return suffix;
+  }
+
+  private async releaseBusinessSlug(slug: string): Promise<void> {
+    await FirestoreDataBase.getDB()
+      .collection(BUSINESS_SLUGS_COLLECTION)
+      .doc(slug)
+      .delete();
   }
 
   private async ensureCreatorMembership(

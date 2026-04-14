@@ -1,11 +1,7 @@
 import { CustomError } from "../../../domain/errors/custom-error";
 import { validateConsecutivePrefix } from "../../../domain/utils/booking-consecutive.utils";
 import { validateAndNormalizeStartPeriods } from "../../../domain/utils/usage-period.utils";
-import {
-  normalizeSpaces,
-  removeAccents,
-  slugFromName,
-} from "../../../domain/utils/string.utils";
+import { normalizeSpaces } from "../../../domain/utils/string.utils";
 import type { BusinessType } from "./create-business.dto";
 import {
   BUSINESS_TYPES,
@@ -17,14 +13,11 @@ import type { CreateBranchItemDto } from "../../branch/dtos/create-branch.dto";
 import { validateCreateBranchItemDto } from "../../branch/dtos/create-branch.dto";
 
 export interface UpdateBusinessDto {
-  name?: string;
   type?: BusinessType;
   planId?: string;
   startPeriods?: string[];
   consecutivePrefix?: string;
   logoUrl?: string;
-  /** Generado si se envía name. */
-  slug?: string;
   services?: CreateServiceItemDto[];
   branches?: CreateBranchItemDto[];
 }
@@ -36,25 +29,16 @@ export function validateUpdateBusinessDto(body: unknown): UpdateBusinessDto {
   const b = body as Record<string, unknown>;
   const result: UpdateBusinessDto = {};
 
-  const nameRaw = b.name;
-  if (nameRaw !== undefined) {
-    if (typeof nameRaw !== "string") {
-      throw CustomError.badRequest("name debe ser un texto cuando se proporcione");
-    }
-    const nameNormalized = normalizeSpaces(nameRaw);
-    if (nameNormalized === "") {
-      throw CustomError.badRequest("name no puede estar vacío");
-    }
-    const sanitizedName = normalizeSpaces(
-      removeAccents(nameNormalized).replace(/[^a-zA-Z0-9\s]/g, " ")
+  if (b.name !== undefined) {
+    throw CustomError.badRequest(
+      "name no se puede editar después de crear el negocio"
     );
-    if (sanitizedName === "") {
-      throw CustomError.badRequest(
-        "name debe tener al menos una letra o número luego de limpiar caracteres especiales"
-      );
-    }
-    result.name = sanitizedName.toUpperCase();
-    result.slug = slugFromName(result.name);
+  }
+
+  if (b.slug !== undefined) {
+    throw CustomError.badRequest(
+      "slug no se puede editar después de crear el negocio"
+    );
   }
 
   const type = b.type;
@@ -142,7 +126,7 @@ export function validateUpdateBusinessDto(body: unknown): UpdateBusinessDto {
 
   if (Object.keys(result).length === 0) {
     throw CustomError.badRequest(
-      "Se debe proporcionar al menos un campo (name, type, planId, startPeriods, consecutivePrefix, logoUrl, services, branches)"
+      "Se debe proporcionar al menos un campo editable (type, planId, startPeriods, consecutivePrefix, logoUrl, services, branches)"
     );
   }
 

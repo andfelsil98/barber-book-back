@@ -135,10 +135,12 @@ type AppointmentStored = {
 export interface UpdateAppointmentOptions {
   branchIdOverride?: string;
   skipBookingSync?: boolean;
+  allowUnavailableBusiness?: boolean;
 }
 
 export interface SetAppointmentStatusOptions {
   skipBookingSync?: boolean;
+  allowUnavailableBusiness?: boolean;
 }
 
 export class AppointmentService {
@@ -672,7 +674,10 @@ export class AppointmentService {
           : booking.branchId;
       const branch = await this.ensureBusinessAndBranch(
         booking.businessId,
-        branchIdForValidation
+        branchIdForValidation,
+        opts?.allowUnavailableBusiness === true
+          ? { allowUnavailableBusiness: true }
+          : undefined
       );
       const nextService = await this.ensureServiceExistsInBusiness(
         dto.serviceId,
@@ -1697,9 +1702,10 @@ export class AppointmentService {
 
   async ensureBusinessAndBranch(
     businessId: string,
-    branchId: string
+    branchId: string,
+    opts?: { allowUnavailableBusiness?: boolean }
   ): Promise<Branch> {
-    await this.ensureBusinessExists(businessId);
+    await this.ensureBusinessExists(businessId, opts);
     return this.ensureBranchBelongsToBusiness(branchId, businessId);
   }
 
@@ -1747,8 +1753,13 @@ export class AppointmentService {
     }
   }
 
-  private async ensureBusinessExists(businessId: string): Promise<void> {
-    const cacheKey = `business:${businessId}`;
+  private async ensureBusinessExists(
+    businessId: string,
+    opts?: { allowUnavailableBusiness?: boolean }
+  ): Promise<void> {
+    const cacheKey = `business:${businessId}:${
+      opts?.allowUnavailableBusiness === true ? "allow-unavailable" : "active-only"
+    }`;
     if (this.validationCache.has(cacheKey)) return;
 
     const businesses = await FirestoreService.getAll<Business>(BUSINESS_COLLECTION, [
@@ -1759,9 +1770,28 @@ export class AppointmentService {
       throw CustomError.notFound("No existe un negocio con este id");
     }
 
-    if (businesses[0]!.status === "DELETED") {
+    const business = businesses[0]!;
+    if (business.status === "DELETED") {
       throw CustomError.badRequest(
         "No se pueden crear citas para un negocio eliminado"
+      );
+    }
+    if (
+      opts?.allowUnavailableBusiness !== true &&
+      business.status !== "ACTIVE"
+    ) {
+      throw CustomError.forbidden(
+        "Este negocio no está disponible para agendamientos en este momento",
+        "BUSINESS_UNAVAILABLE_FOR_BOOKING"
+      );
+    }
+    if (
+      opts?.allowUnavailableBusiness !== true &&
+      (business.subscriptionStatus ?? "ACTIVE") !== "ACTIVE"
+    ) {
+      throw CustomError.forbidden(
+        "Este negocio no está disponible para agendamientos en este momento",
+        "BUSINESS_UNAVAILABLE_FOR_BOOKING"
       );
     }
 
@@ -1814,9 +1844,9 @@ export class AppointmentService {
     }
 
     const service = services[0]!;
-    if (service.businessId !== businessId || service.status === "DELETED") {
+    if (service.businessId !== businessId || service.status !== "ACTIVE") {
       throw CustomError.badRequest(
-        "serviceId debe pertenecer a un servicio vigente del negocio"
+        "serviceId debe pertenecer a un servicio activo del negocio"
       );
     }
 
@@ -1911,7 +1941,13 @@ export class AppointmentService {
     }
 
     const mapped = this.mapAppointmentToResponse(existingAppointment);
-    await this.ensureBusinessAndBranch(booking.businessId, booking.branchId);
+    await this.ensureBusinessAndBranch(
+      booking.businessId,
+      booking.branchId,
+      opts?.allowUnavailableBusiness === true
+        ? { allowUnavailableBusiness: true }
+        : undefined
+    );
     const service = await this.ensureServiceExistsInBusiness(
       mapped.serviceId,
       booking.businessId
@@ -2095,7 +2131,7 @@ export class AppointmentService {
     if (services.length === 0) return false;
 
     const service = services[0]!;
-    return service.businessId === businessId && service.status !== "DELETED";
+    return service.businessId === businessId && service.status === "ACTIVE";
   }
 
   private async ensureNoEmployeeScheduleConflict(

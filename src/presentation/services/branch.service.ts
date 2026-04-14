@@ -2,7 +2,7 @@ import { FirestoreDataBase } from "../../data/firestore/firestore.database";
 import { CustomError } from "../../domain/errors/custom-error";
 import type { Business } from "../../domain/interfaces/business.interface";
 import type { BusinessMembership } from "../../domain/interfaces/business-membership.interface";
-import type { Branch } from "../../domain/interfaces/branch.interface";
+import type { Branch, BranchScheduleDay } from "../../domain/interfaces/branch.interface";
 import { slugFromName } from "../../domain/utils/string.utils";
 import type { PaginatedResult, PaginationParams } from "../../domain/interfaces/pagination.interface";
 import { MAX_PAGE_SIZE } from "../../domain/interfaces/pagination.interface";
@@ -20,6 +20,39 @@ const BUSINESS_MEMBERSHIPS_COLLECTION = "BusinessMemberships";
 
 function toNameKey(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function normalizeScheduleForComparison(
+  schedule: BranchScheduleDay[]
+): BranchScheduleDay[] {
+  return [...schedule]
+    .map((day) => ({
+      day: day.day,
+      isOpen: day.isOpen,
+      slots: [...day.slots]
+        .map((slot) => ({
+          openingTime: slot.openingTime.trim(),
+          closingTime: slot.closingTime.trim(),
+        }))
+        .sort((left, right) => {
+          const openingComparison = left.openingTime.localeCompare(
+            right.openingTime
+          );
+          if (openingComparison !== 0) return openingComparison;
+          return left.closingTime.localeCompare(right.closingTime);
+        }),
+    }))
+    .sort((left, right) => left.day - right.day);
+}
+
+function areSchedulesEquivalent(
+  currentSchedule: BranchScheduleDay[],
+  nextSchedule: BranchScheduleDay[]
+): boolean {
+  return (
+    JSON.stringify(normalizeScheduleForComparison(currentSchedule)) ===
+    JSON.stringify(normalizeScheduleForComparison(nextSchedule))
+  );
 }
 
 export class BranchService {
@@ -154,6 +187,17 @@ export class BranchService {
       if (branch.status === "DELETED" && !isRestoringDeletedBranch) {
         throw CustomError.badRequest(
           "No se puede editar una sede eliminada sin reactivarla"
+        );
+      }
+
+      if (!areSchedulesEquivalent(branch.schedule, dto.schedule)) {
+        await this.schedulingIntegrityService.ensureActiveAppointmentsRespectBranchSchedule(
+          {
+            branchId: branch.id,
+            schedule: dto.schedule,
+            errorMessagePrefix:
+              "No se puede actualizar el horario de la sede porque hay citas activas fuera del nuevo horario",
+          }
         );
       }
 

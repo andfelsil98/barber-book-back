@@ -17,7 +17,6 @@ export interface AssignBranchDto {
 export interface CreatePendingMembershipByDocumentDto {
   document: string;
   businessId?: string;
-  businessName?: string;
 }
 
 export function validateBusinessIdHeader(value: unknown): string {
@@ -145,26 +144,14 @@ export function validateCreatePendingMembershipByDocumentDto(
     businessId = businessIdRaw.trim();
   }
 
-  const businessNameRaw = b.businessName;
-  let businessName: string | undefined;
-  if (businessNameRaw !== undefined) {
-    if (typeof businessNameRaw !== "string" || businessNameRaw.trim() === "") {
-      throw CustomError.badRequest(
-        "businessName debe ser un texto no vacío cuando se proporcione"
-      );
-    }
-    businessName = businessNameRaw.trim();
-  }
-
-  if (businessId !== undefined && businessName !== undefined) {
+  if (b.businessName !== undefined) {
     throw CustomError.badRequest(
-      "No se puede enviar businessId y businessName al mismo tiempo"
+      "businessName ya no es soportado; usa businessId cuando quieras crear la membresía para un negocio específico"
     );
   }
 
   return {
     document: documentRaw.trim(),
     ...(businessId !== undefined && { businessId }),
-    ...(businessName !== undefined && { businessName }),
   };
 }

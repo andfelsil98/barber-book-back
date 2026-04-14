@@ -87,7 +87,7 @@ export async function businessIdHeaderMiddleware(
       );
       next(
         CustomError.forbidden(
-          "El negocio no tiene un plan asignado",
+          "El negocio no tiene un plan asignado. Configura un plan para continuar",
           "BUSINESS_PLAN_REQUIRED"
         )
       );
@@ -101,7 +101,7 @@ export async function businessIdHeaderMiddleware(
       );
       next(
         CustomError.forbidden(
-          "El plan del negocio no está activo o vigente",
+          "El plan del negocio está vencido o inactivo. Renueva o reactiva el plan para continuar",
           "BUSINESS_SUBSCRIPTION_INACTIVE"
         )
       );
@@ -129,7 +129,7 @@ export async function businessIdHeaderMiddleware(
       );
       next(
         CustomError.forbidden(
-          "El plan del negocio no está activo o vigente",
+          "El plan asignado al negocio está inactivo. Activa un plan vigente para continuar",
           "BUSINESS_PLAN_INACTIVE"
         )
       );

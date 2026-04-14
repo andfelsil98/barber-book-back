@@ -106,16 +106,21 @@ export class ServiceService {
         { field: "id", operator: "==", value: id },
       ]);
       if (services.length === 0) throw CustomError.notFound("No existe un servicio con este id");
+      const existingService = services[0]!;
 
       if (dto.name !== undefined) {
         const existingServices = await FirestoreService.getAll<Service>(COLLECTION_NAME, [
-          { field: "businessId", operator: "==", value: services[0]?.businessId },
+          { field: "businessId", operator: "==", value: existingService.businessId },
         ]);
         const nameKey = toNameKey(dto.name);
         const nameTaken = existingServices.some(
           (s) => s.id !== id && toNameKey(s.name) === nameKey
         );
         if (nameTaken) throw CustomError.conflict("A service with this name already exists for this business");
+      }
+
+      if (dto.status === "INACTIVE" && existingService.status !== "INACTIVE") {
+        await this.schedulingIntegrityService.ensureServiceCanBeInactivated(existingService.id);
       }
 
       const payload: Record<string, unknown> = {

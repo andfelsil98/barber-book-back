@@ -30,11 +30,11 @@ export class AuthService {
 
   async register(dto: RegisterDto): Promise<RegisterResult> {
     const business =
-      dto.businessName != null
-        ? await this.findActiveBusinessByName(dto.businessName)
+      dto.businessSlug != null
+        ? await this.findActiveBusinessBySlug(dto.businessSlug)
         : null;
-    if (dto.businessName != null && business == null) {
-      throw CustomError.notFound("No existe un negocio activo con ese nombre");
+    if (dto.businessSlug != null && business == null) {
+      throw CustomError.notFound("No existe un negocio activo con ese identificador");
     }
 
     const [emailExists, documentExists] = await Promise.all([
@@ -111,9 +111,9 @@ export class AuthService {
     return { user };
   }
 
-  private async findActiveBusinessByName(businessName: string): Promise<Business | null> {
+  private async findActiveBusinessBySlug(businessSlug: string): Promise<Business | null> {
     const businesses = await FirestoreService.getAll<Business>(BUSINESS_COLLECTION, [
-      { field: "name", operator: "==", value: businessName },
+      { field: "slug", operator: "==", value: businessSlug },
       { field: "status", operator: "==", value: "ACTIVE" },
     ]);
     return businesses[0] ?? null;

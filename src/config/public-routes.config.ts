@@ -29,7 +29,7 @@ export const PUBLIC_ROUTE_METHOD_PATHS: Array<{
   { method: "GET", path: "/bookings", match: "prefix" },
   { method: "POST", path: "/reviews" },
   { method: "POST", path: "/bookings" },
-  { method: "PUT", path: "/bookings", match: "prefix" },
+  { method: "PUT", path: "/bookings/public-manage", match: "prefix" },
   { method: "POST", path: "/whatsapp/send-message", match: "prefix" },
   { method: "POST", path: "/business/usage/reconcile-today" },
   { method: "GET", path: "/plans" },

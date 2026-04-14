@@ -36,6 +36,10 @@ export type BookingAppointmentOperationDto =
   | UpdateBookingAppointmentOperationDto
   | CancelBookingAppointmentOperationDto;
 
+export type PublicManageBookingOperationDto =
+  | UpdateBookingAppointmentOperationDto
+  | CancelBookingAppointmentOperationDto;
+
 export interface UpdateBookingDto {
   branchId?: string;
   clientId?: string;
@@ -48,6 +52,11 @@ export interface UpdateBookingDto {
   paidAmount?: number;
   status?: BookingStatus;
   operations?: BookingAppointmentOperationDto[];
+}
+
+export interface PublicManageBookingDto {
+  status?: "CANCELLED";
+  operations?: PublicManageBookingOperationDto[];
 }
 
 const PAYMENT_METHODS: BookingPaymentMethod[] = [
@@ -339,5 +348,59 @@ export function validateUpdateBookingDto(body: unknown): UpdateBookingDto {
     ...(paidAmount !== undefined && { paidAmount }),
     ...(status !== undefined && { status }),
     ...(operations !== undefined && { operations }),
+  };
+}
+
+export function validatePublicManageBookingDto(
+  body: unknown
+): PublicManageBookingDto {
+  const dto = validateUpdateBookingDto(body);
+
+  const hasRestrictedAdministrativeFields =
+    dto.branchId !== undefined ||
+    dto.clientId !== undefined ||
+    dto.clientDocumentTypeId !== undefined ||
+    dto.clientDocumentTypeName !== undefined ||
+    dto.clientName !== undefined ||
+    dto.clientPhone !== undefined ||
+    dto.clientEmail !== undefined ||
+    dto.paymentMethod !== undefined ||
+    dto.paidAmount !== undefined;
+
+  if (hasRestrictedAdministrativeFields) {
+    throw CustomError.badRequest(
+      "Desde la gestión pública solo puedes cancelar el agendamiento o editar/cancelar citas existentes"
+    );
+  }
+
+  if (dto.status !== undefined && dto.status !== "CANCELLED") {
+    throw CustomError.badRequest(
+      "Desde la gestión pública solo puedes cancelar el agendamiento completo"
+    );
+  }
+
+  const hasAddOperations = (dto.operations ?? []).some(
+    (operation) => operation.op === "add"
+  );
+  if (hasAddOperations) {
+    throw CustomError.badRequest(
+      "Desde la gestión pública no se pueden agregar nuevas citas al agendamiento"
+    );
+  }
+
+  if (dto.status !== undefined && dto.operations !== undefined) {
+    throw CustomError.badRequest(
+      "Debes elegir entre cancelar el agendamiento completo o editar/cancelar sus citas existentes"
+    );
+  }
+
+  return {
+    ...(dto.status !== undefined && { status: dto.status }),
+    ...(dto.operations !== undefined && {
+      operations: dto.operations.filter(
+        (operation): operation is PublicManageBookingOperationDto =>
+          operation.op === "update" || operation.op === "cancel"
+      ),
+    }),
   };
 }

@@ -10,6 +10,7 @@ import type {
   BookingStatus,
 } from "../../domain/interfaces/booking.interface";
 import { BOOKING_STATUSES } from "../../domain/interfaces/booking.interface";
+import type { Branch } from "../../domain/interfaces/branch.interface";
 import type { Business } from "../../domain/interfaces/business.interface";
 import type { Service } from "../../domain/interfaces/service.interface";
 import type {
@@ -22,7 +23,10 @@ import type {
   CreateBookingAppointmentDto,
   CreateBookingDto,
 } from "../booking/dtos/create-booking.dto";
-import type { UpdateBookingDto } from "../booking/dtos/update-booking.dto";
+import type {
+  PublicManageBookingDto,
+  UpdateBookingDto,
+} from "../booking/dtos/update-booking.dto";
 import { BOOKING_PAYMENT_METHOD_UPDATE_OPTIONS } from "../booking/dtos/update-booking-payment-method.dto";
 import { BusinessUsageLimitService } from "./business-usage-limit.service";
 import FirestoreService from "./firestore.service";
@@ -34,6 +38,7 @@ import type { WhatsAppService } from "./whatsapp.service";
 import { UserService } from "./user.service";
 import { BookingConsecutiveService } from "./booking-consecutive.service";
 import type { PushNotificationService } from "./push-notification.service";
+import { SchedulingIntegrityService } from "./scheduling-integrity.service";
 
 const BOOKINGS_COLLECTION = "Bookings";
 const BUSINESSES_COLLECTION = "Businesses";
@@ -44,6 +49,10 @@ const BOOKING_PAYMENT_METHOD_ALLOWED_APPOINTMENT_STATUSES: AppointmentStatus[] =
   "IN_PROGRESS",
   "FINISHED",
 ];
+
+interface UpdateBookingOptions {
+  allowUnavailableBusinessForExistingAppointments?: boolean;
+}
 
 export class BookingService {
   constructor(
@@ -56,7 +65,9 @@ export class BookingService {
     private readonly bookingConsecutiveService: BookingConsecutiveService =
       new BookingConsecutiveService(),
     private readonly businessUsageLimitService: BusinessUsageLimitService =
-      new BusinessUsageLimitService()
+      new BusinessUsageLimitService(),
+    private readonly schedulingIntegrityService: SchedulingIntegrityService =
+      new SchedulingIntegrityService()
   ) {}
 
   async getAllBookings(
@@ -414,10 +425,29 @@ export class BookingService {
   }
 
   async updateBooking(id: string, dto: UpdateBookingDto): Promise<Booking> {
+    return this.updateBookingInternal(id, dto);
+  }
+
+  async publicManageBooking(
+    id: string,
+    dto: PublicManageBookingDto
+  ): Promise<Booking> {
+    return this.updateBookingInternal(id, dto, {
+      allowUnavailableBusinessForExistingAppointments: true,
+    });
+  }
+
+  private async updateBookingInternal(
+    id: string,
+    dto: UpdateBookingDto,
+    opts?: UpdateBookingOptions
+  ): Promise<Booking> {
     try {
       const existingBooking = await this.getBookingById(id);
       const beforeRevenueSnapshot =
         await this.appointmentService.captureBookingRevenueSnapshot(id);
+      const allowUnavailableBusinessForExistingAppointments =
+        opts?.allowUnavailableBusinessForExistingAppointments === true;
       const hasBookingEditChanges =
         dto.branchId !== undefined ||
         dto.clientId !== undefined ||
@@ -442,13 +472,18 @@ export class BookingService {
       }
 
       const nextBranchId = dto.branchId ?? existingBooking.branchId;
+      let nextBranchForValidation: Branch | null = null;
       if (
         dto.branchId !== undefined &&
         dto.branchId.trim() !== existingBooking.branchId.trim()
       ) {
-        await this.appointmentService.ensureBusinessAndBranch(
+        nextBranchForValidation = await this.appointmentService.ensureBusinessAndBranch(
           existingBooking.businessId,
-          nextBranchId
+          nextBranchId,
+          {
+            allowUnavailableBusiness:
+              allowUnavailableBusinessForExistingAppointments,
+          }
         );
       }
 
@@ -536,6 +571,8 @@ export class BookingService {
             {
               branchIdOverride: nextBranchId,
               skipBookingSync: true,
+              allowUnavailableBusiness:
+                allowUnavailableBusinessForExistingAppointments,
             }
           );
         }
@@ -545,6 +582,18 @@ export class BookingService {
       if (normalizedAppointmentIds.length === 0 && !isDeletingBooking) {
         throw CustomError.badRequest(
           "Un booking debe incluir al menos un servicio/cita"
+        );
+      }
+
+      if (nextBranchForValidation != null) {
+        await this.schedulingIntegrityService.ensureActiveAppointmentsRespectBranchSchedule(
+          {
+            appointmentIds: normalizedAppointmentIds,
+            schedule: nextBranchForValidation.schedule,
+            fallbackBookingId: existingBooking.id,
+            errorMessagePrefix:
+              "No se puede mover el agendamiento a la sede seleccionada porque hay citas activas fuera del horario de esa sede",
+          }
         );
       }
 
@@ -581,7 +630,11 @@ export class BookingService {
         await this.ensureBookingCanBeMarkedCreated(
           existingBooking.businessId,
           nextBranchId,
-          normalizedAppointmentIds
+          normalizedAppointmentIds,
+          {
+            allowUnavailableBusiness:
+              allowUnavailableBusinessForExistingAppointments,
+          }
         );
       }
 
@@ -1165,9 +1218,16 @@ export class BookingService {
   private async ensureBookingCanBeMarkedCreated(
     businessId: string,
     branchId: string,
-    appointmentIds: string[]
+    appointmentIds: string[],
+    opts?: { allowUnavailableBusiness?: boolean }
   ): Promise<void> {
-    await this.appointmentService.ensureBusinessAndBranch(businessId, branchId);
+    await this.appointmentService.ensureBusinessAndBranch(
+      businessId,
+      branchId,
+      opts?.allowUnavailableBusiness === true
+        ? { allowUnavailableBusiness: true }
+        : undefined
+    );
     if (appointmentIds.length === 0) return;
 
     const appointments = await this.appointmentService.getAppointmentsByIds(appointmentIds);

@@ -32,6 +32,23 @@ function resolveUsageField(resource: BusinessUsageQuotaResource): UsageField {
   }
 }
 
+function resolveUsageLimitReachedMessage(
+  resource: BusinessUsageQuotaResource
+): string {
+  switch (resource) {
+    case "employees":
+      return "El negocio alcanzó el límite de colaboradores de su plan actual";
+    case "branches":
+      return "El negocio alcanzó el límite de sedes de su plan actual";
+    case "bookings":
+      return "El negocio alcanzó el límite de agendamientos de su plan actual";
+    case "roles":
+      return "El negocio alcanzó el límite de roles de su plan actual";
+    default:
+      return "El negocio alcanzó el límite de recursos de su plan actual";
+  }
+}
+
 export class BusinessUsageLimitService {
   constructor(
     private readonly businessUsageService: BusinessUsageService =
@@ -65,6 +82,18 @@ export class BusinessUsageLimitService {
       if (business.status === "DELETED") {
         throw CustomError.badRequest("No se puede consumir cupos de un negocio eliminado");
       }
+      if (business.status !== "ACTIVE") {
+        throw CustomError.forbidden(
+          "El negocio está inactivo y no puede operar en este momento",
+          "BUSINESS_INACTIVE"
+        );
+      }
+      if ((business.subscriptionStatus ?? "INACTIVE") !== "ACTIVE") {
+        throw CustomError.forbidden(
+          "El plan del negocio está vencido o inactivo. Renueva o reactiva el plan para continuar",
+          "BUSINESS_SUBSCRIPTION_INACTIVE"
+        );
+      }
 
       const usageQuery = businessRef
         .collection(USAGE_SUBCOLLECTION)
@@ -73,7 +102,10 @@ export class BusinessUsageLimitService {
       const usageSnapshots = await transaction.get(usageQuery);
 
       if (usageSnapshots.empty) {
-        throw CustomError.conflict("Plan limit reached");
+        throw CustomError.forbidden(
+          "El plan del negocio está vencido o inactivo. Renueva o reactiva el plan para continuar",
+          "BUSINESS_SUBSCRIPTION_INACTIVE"
+        );
       }
       if (usageSnapshots.size > 1) {
         throw CustomError.conflict("Se detectaron múltiples usage ACTIVE para el negocio");
@@ -84,7 +116,10 @@ export class BusinessUsageLimitService {
       const currentValue = Math.max(0, Number(usage[usageField] ?? 0));
 
       if (currentValue < normalizedAmount) {
-        throw CustomError.conflict("Plan limit reached");
+        throw CustomError.conflict(
+          resolveUsageLimitReachedMessage(resource),
+          "BUSINESS_PLAN_LIMIT_REACHED"
+        );
       }
 
       transaction.update(usageSnapshot.ref, {

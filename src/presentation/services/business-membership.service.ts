@@ -39,7 +39,6 @@ export interface CreateBusinessMembershipData {
 
 export interface CreatePendingMembershipByDocumentData {
   businessId?: string;
-  businessName?: string;
   document: string;
 }
 
@@ -381,7 +380,6 @@ export class BusinessMembershipService {
     try {
       const document = data.document.trim();
       const explicitBusinessId = data.businessId?.trim() ?? "";
-      const businessName = data.businessName?.trim() ?? "";
 
       const user = await this.findUserByDocument(document);
 
@@ -392,12 +390,7 @@ export class BusinessMembershipService {
       }
 
       const now = FirestoreDataBase.generateTimeStamp();
-      const businessId =
-        explicitBusinessId !== ""
-          ? explicitBusinessId
-          : businessName !== ""
-            ? (await this.getBusinessByName(businessName)).id
-            : "";
+      const businessId = explicitBusinessId;
       if (businessId !== "") {
         const business = await this.getBusinessById(businessId);
         if (business.status === "DELETED") {
@@ -907,23 +900,6 @@ export class BusinessMembershipService {
     }
 
     return businesses[0]!;
-  }
-
-  private async getBusinessByName(businessName: string): Promise<Business> {
-    const businesses = await FirestoreService.getAll<Business>(
-      BUSINESSES_COLLECTION,
-      [{ field: "name", operator: "==", value: businessName }]
-    );
-    const business =
-      businesses.find((item) => item.status !== "DELETED") ?? null;
-
-    if (!business) {
-      throw CustomError.notFound(
-        "No existe un negocio activo con el nombre indicado"
-      );
-    }
-
-    return business;
   }
 
   private async findUserByDocument(document: string): Promise<User | null> {

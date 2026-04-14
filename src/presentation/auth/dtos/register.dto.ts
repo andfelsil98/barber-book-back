@@ -1,5 +1,9 @@
 import { CustomError } from "../../../domain/errors/custom-error";
-import { normalizeSpaces, removeAccents } from "../../../domain/utils/string.utils";
+import {
+  normalizeSpaces,
+  removeAccents,
+  slugFromName,
+} from "../../../domain/utils/string.utils";
 
 /** Tipos de documento: id -> nombre. */
 export const DOCUMENT_TYPES: Record<string, string> = {
@@ -15,7 +19,7 @@ function isDocumentTypeId(value: unknown): value is string {
 }
 
 export interface RegisterDto {
-  businessName?: string;
+  businessSlug?: string;
   phone: string;
   name: string;
   email: string;
@@ -31,17 +35,22 @@ export function validateRegisterDto(body: unknown): RegisterDto {
   }
   const b = body as Record<string, unknown>;
 
-  const businessNameRaw = b.businessName;
-  let businessName: string | undefined;
-  if (businessNameRaw !== undefined) {
-    if (typeof businessNameRaw !== "string") {
+  const businessSlugRaw = b.businessSlug;
+  let businessSlug: string | undefined;
+  if (businessSlugRaw !== undefined) {
+    if (typeof businessSlugRaw !== "string") {
       throw CustomError.badRequest(
-        "businessName debe ser un texto cuando se proporcione"
+        "businessSlug debe ser un texto cuando se proporcione"
       );
     }
-    const normalizedBusinessName = normalizeSpaces(businessNameRaw);
-    if (normalizedBusinessName !== "") {
-      businessName = normalizedBusinessName;
+    const normalizedBusinessSlug = slugFromName(businessSlugRaw);
+    if (businessSlugRaw.trim() !== "" && normalizedBusinessSlug === "") {
+      throw CustomError.badRequest(
+        "businessSlug debe contener letras o números cuando se proporcione"
+      );
+    }
+    if (normalizedBusinessSlug !== "") {
+      businessSlug = normalizedBusinessSlug;
     }
   }
 
@@ -101,7 +110,7 @@ export function validateRegisterDto(body: unknown): RegisterDto {
   }
 
   return {
-    ...(businessName !== undefined && { businessName }),
+    ...(businessSlug !== undefined && { businessSlug }),
     phone,
     name,
     email,

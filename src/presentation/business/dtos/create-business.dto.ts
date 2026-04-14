@@ -1,11 +1,7 @@
 import { CustomError } from "../../../domain/errors/custom-error";
 import { validateConsecutivePrefix } from "../../../domain/utils/booking-consecutive.utils";
 import { validateAndNormalizeStartPeriods } from "../../../domain/utils/usage-period.utils";
-import {
-  normalizeSpaces,
-  removeAccents,
-  slugFromName,
-} from "../../../domain/utils/string.utils";
+import { normalizeSpaces, removeAccents } from "../../../domain/utils/string.utils";
 
 export const BUSINESS_TYPES = ["BARBERSHOP", "HAIRSALON", "BEAUTYSALON"] as const;
 export type BusinessType = (typeof BUSINESS_TYPES)[number];
@@ -17,8 +13,6 @@ export interface CreateBusinessDto {
   startPeriods: string[];
   consecutivePrefix: string;
   logoUrl?: string;
-  /** Generado a partir de name en validateCreateBusinessDto. */
-  slug: string;
 }
 
 export function isBusinessType(value: unknown): value is BusinessType {
@@ -78,6 +72,5 @@ export function validateCreateBusinessDto(body: unknown): CreateBusinessDto {
     startPeriods,
     consecutivePrefix,
     ...(logoUrl !== undefined && logoUrl !== "" && { logoUrl }),
-    slug: slugFromName(name),
   };
 }
