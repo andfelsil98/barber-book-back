@@ -17,6 +17,7 @@ import {
   buildPagination,
   MAX_PAGE_SIZE,
 } from "../../domain/interfaces/pagination.interface";
+import { resolveProtectedRoleDefinition } from "../../domain/constants/protected-role.constants";
 import { BusinessUsageLimitService } from "./business-usage-limit.service";
 import FirestoreService from "./firestore.service";
 import type { CreateRoleDto } from "../role/dtos/create-role.dto";
@@ -32,6 +33,10 @@ const BUSINESS_MEMBERSHIPS_COLLECTION = "BusinessMemberships";
 
 function toNameKey(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function sortRolesByCreatedAtDesc(left: Role, right: Role): number {
+  return (right.createdAt ?? "").localeCompare(left.createdAt ?? "");
 }
 
 export class RoleService {
@@ -58,9 +63,7 @@ export class RoleService {
         const roles = await FirestoreService.getAll<Role>(COLLECTION_NAME, [
           { field: "type", operator: "in", value: ["GLOBAL", "CROSS_BUSINESS"] },
         ]);
-        roles.sort((left, right) =>
-          (right.createdAt ?? "").localeCompare(left.createdAt ?? "")
-        );
+        roles.sort(sortRolesByCreatedAtDesc);
         const total = roles.length;
         const offset = (page - 1) * pageSize;
         return {
@@ -70,36 +73,23 @@ export class RoleService {
         };
       }
 
-      const [
-        crossBusinessRoles,
-        businessRolesPage,
-        businessRolesTotal,
-      ] = await Promise.all([
+      const [crossBusinessRoles, businessRoles] = await Promise.all([
         FirestoreService.getAll<Role>(COLLECTION_NAME, [
           { field: "type", operator: "==", value: "CROSS_BUSINESS" },
         ]),
-        FirestoreService.getAllPaginated<Role>(
-          COLLECTION_NAME,
-          { page, pageSize },
-          [
-            { field: "type", operator: "==", value: "BUSINESS" },
-            { field: "businessId", operator: "==", value: businessId },
-          ]
-        ),
-        (async () => {
-          const allBusiness = await FirestoreService.getAll<Role>(COLLECTION_NAME, [
-            { field: "type", operator: "==", value: "BUSINESS" },
-            { field: "businessId", operator: "==", value: businessId },
-          ]);
-          return allBusiness.length;
-        })(),
+        FirestoreService.getAll<Role>(COLLECTION_NAME, [
+          { field: "type", operator: "==", value: "BUSINESS" },
+          { field: "businessId", operator: "==", value: businessId },
+        ]),
       ]);
 
-      const combinedData = [...crossBusinessRoles, ...businessRolesPage.data];
-      const total = crossBusinessRoles.length + businessRolesTotal;
+      const combinedRoles = [...crossBusinessRoles, ...businessRoles];
+      combinedRoles.sort(sortRolesByCreatedAtDesc);
+      const total = combinedRoles.length;
+      const offset = (page - 1) * pageSize;
 
       return {
-        data: combinedData,
+        data: combinedRoles.slice(offset, offset + pageSize),
         total,
         pagination: buildPagination(page, pageSize, total),
       };
@@ -247,6 +237,11 @@ export class RoleService {
       }
 
       const role = roles[0]!;
+      const protectedRole = resolveProtectedRoleDefinition({
+        id: role.id,
+        name: role.name,
+        type: role.type,
+      });
       const currentPermissionsSnapshot = await FirestoreService.getAllFromSubcollection<{
         id: string;
       }>(COLLECTION_NAME, id, "Permissions");
@@ -258,18 +253,32 @@ export class RoleService {
         updatedAt: FirestoreDataBase.generateTimeStamp(),
       };
       if (dto.name !== undefined) {
-        const nameKey = toNameKey(dto.name);
-        const existingRoles = await FirestoreService.getAll<Role>(COLLECTION_NAME);
-        const duplicated = existingRoles.some(
-          (existingRole) => existingRole.id !== id && toNameKey(existingRole.name) === nameKey
-        );
-        if (duplicated) {
-          throw CustomError.conflict("Ya existe un rol con este nombre");
+        if (protectedRole && toNameKey(dto.name) !== toNameKey(role.name)) {
+          throw CustomError.badRequest(
+            `No se puede cambiar el nombre del rol protegido ${protectedRole.name}`
+          );
         }
-        payload.name = dto.name;
+
+        const nameKey = toNameKey(dto.name);
+        if (nameKey !== toNameKey(role.name)) {
+          const existingRoles = await FirestoreService.getAll<Role>(COLLECTION_NAME);
+          const duplicated = existingRoles.some(
+            (existingRole) => existingRole.id !== id && toNameKey(existingRole.name) === nameKey
+          );
+          if (duplicated) {
+            throw CustomError.conflict("Ya existe un rol con este nombre");
+          }
+          payload.name = dto.name;
+        }
       }
 
       if (dto.permissions !== undefined) {
+        if (protectedRole && dto.permissions.some((operation) => operation.op === "remove")) {
+          throw CustomError.badRequest(
+            `No se pueden remover permisos del rol protegido ${protectedRole.name}`
+          );
+        }
+
         const resolvedOperations = await this.resolvePermissionOperations(
           dto.permissions
         );
@@ -334,6 +343,18 @@ export class RoleService {
         throw CustomError.notFound("No existe un rol con este id");
       }
 
+      const role = roles[0]!;
+      const protectedRole = resolveProtectedRoleDefinition({
+        id: role.id,
+        name: role.name,
+        type: role.type,
+      });
+      if (protectedRole) {
+        throw CustomError.badRequest(
+          `No se puede eliminar el rol protegido ${protectedRole.name}`
+        );
+      }
+
       const membershipsUsingRole = await FirestoreService.getAll<BusinessMembership>(
         BUSINESS_MEMBERSHIPS_COLLECTION,
         [{ field: "roleId", operator: "==", value: id }]
@@ -346,7 +367,6 @@ export class RoleService {
           "No se puede eliminar el rol porque hay usuarios con membresías que lo tienen asignado"
         );
       }
-      const role = roles[0]!;
 
       await FirestoreService.deleteSubcollectionDocuments(
         COLLECTION_NAME,

@@ -2,9 +2,14 @@ import { FirestoreDataBase } from "../../data/firestore/firestore.database";
 import { randomInt } from "node:crypto";
 import { FieldValue } from "firebase-admin/firestore";
 import {
-  DEFAULT_CROSS_BUSINESS_ADMIN_ROLE_NAME,
   type AccessEntityType,
+  type RoleType,
 } from "../../domain/constants/access-control.constants";
+import {
+  getProtectedRoleDefinition,
+  resolveProtectedRoleDefinition,
+  type ProtectedRoleDefinition,
+} from "../../domain/constants/protected-role.constants";
 import { CustomError } from "../../domain/errors/custom-error";
 import type {
   Business,
@@ -929,8 +934,7 @@ export class BusinessService {
       );
     }
 
-    const defaultCrossBusinessRoleId =
-      await this.resolveDefaultCrossBusinessAdminRoleId();
+    const adminRole = await this.resolveOrCreateProtectedRole("ADMIN");
     const memberships = await FirestoreService.getAll<BusinessMembership>(
       BUSINESS_MEMBERSHIPS_COLLECTION,
       [{ field: "businessId", operator: "==", value: businessId }]
@@ -947,7 +951,7 @@ export class BusinessService {
       membershipId = existingMembership.id;
       await FirestoreService.update(BUSINESS_MEMBERSHIPS_COLLECTION, membershipId, {
         userId: creatorUser.document,
-        roleId: defaultCrossBusinessRoleId,
+        roleId: adminRole.id,
         status: "ACTIVE" as const,
         deletedAt: null,
         updatedAt: now,
@@ -959,7 +963,7 @@ export class BusinessService {
           businessId,
           userId: creatorUser.document,
           isEmployee: false,
-          roleId: defaultCrossBusinessRoleId,
+          roleId: adminRole.id,
           status: "ACTIVE" as const,
           createdAt: now,
         }
@@ -979,53 +983,119 @@ export class BusinessService {
     );
   }
 
-  private async resolveDefaultCrossBusinessAdminRoleId(): Promise<string> {
-    const existingRoles = await FirestoreService.getAll<Role>(ROLES_COLLECTION, [
-      { field: "type", operator: "==", value: "CROSS_BUSINESS" },
-    ]);
+  private async resolveOrCreateProtectedRole(
+    key: "ADMIN"
+  ): Promise<Role> {
+    const definition = getProtectedRoleDefinition(key);
+    const matchedRole = await this.findProtectedRole(definition);
 
-    const existingRole =
-      existingRoles.find(
-        (role) =>
-          toNameKey(role.name) === toNameKey(DEFAULT_CROSS_BUSINESS_ADMIN_ROLE_NAME)
-      ) ?? existingRoles[0] ?? null;
-    if (existingRole) {
-      return existingRole.id;
+    if (matchedRole) {
+      return this.ensureProtectedRolePermissions(matchedRole, definition);
     }
 
+    await FirestoreDataBase.getDB()
+      .collection(ROLES_COLLECTION)
+      .doc(definition.id)
+      .set({
+        id: definition.id,
+        name: definition.name,
+        type: definition.type,
+        permissionsCount: 0,
+        createdAt: FirestoreDataBase.generateTimeStamp(),
+      });
+
+    const createdRole = await FirestoreService.getById<Role>(
+      ROLES_COLLECTION,
+      definition.id
+    );
+
+    return this.ensureProtectedRolePermissions(createdRole, definition);
+  }
+
+  private async findProtectedRole(
+    definition: ProtectedRoleDefinition
+  ): Promise<Role | null> {
+    const roleById = await FirestoreService.getAll<Role>(ROLES_COLLECTION, [
+      { field: "id", operator: "==", value: definition.id },
+    ]);
+    if (roleById.length > 0) {
+      return roleById[0] ?? null;
+    }
+
+    const rolesByType = await FirestoreService.getAll<Role>(ROLES_COLLECTION, [
+      { field: "type", operator: "==", value: definition.type },
+    ]);
+
+    return (
+      rolesByType.find(
+        (role) =>
+          resolveProtectedRoleDefinition({
+            id: role.id,
+            name: role.name,
+            type: role.type as RoleType,
+          })?.key === definition.key
+      ) ?? null
+    );
+  }
+
+  private async ensureProtectedRolePermissions(
+    role: Role,
+    definition: ProtectedRoleDefinition
+  ): Promise<Role> {
     const permissions = await FirestoreService.getAll<Permission>(
       PERMISSIONS_COLLECTION
     );
-    const compatiblePermissions = permissions.filter(
-      (permission) =>
-        permission.type === "BUSINESS" || permission.type === "HYBRID"
-    );
-
-    const createdRole = await FirestoreService.create(ROLES_COLLECTION, {
-      name: DEFAULT_CROSS_BUSINESS_ADMIN_ROLE_NAME,
-      type: "CROSS_BUSINESS" as const,
-      permissionsCount: compatiblePermissions.length,
-      createdAt: FirestoreDataBase.generateTimeStamp(),
-    });
-
-    await Promise.all(
-      compatiblePermissions.map((permission) =>
-        FirestoreService.createInSubcollection(
-          ROLES_COLLECTION,
-          createdRole.id,
-          ROLE_PERMISSIONS_SUBCOLLECTION,
-          {
-            id: permission.id,
-            name: permission.name,
-            value: permission.value,
-            moduleId: permission.moduleId,
-            type: permission.type as AccessEntityType,
-          }
-        )
+    const compatiblePermissions = permissions.filter((permission) =>
+      definition.compatiblePermissionTypes.includes(
+        permission.type as AccessEntityType
       )
     );
 
-    return createdRole.id;
+    const currentPermissions = await FirestoreService.getAllFromSubcollection<{
+      id: string;
+    }>(ROLES_COLLECTION, role.id, ROLE_PERMISSIONS_SUBCOLLECTION);
+    const currentPermissionIds = new Set(
+      currentPermissions.map((permission) => permission.id)
+    );
+
+    const missingPermissions = compatiblePermissions.filter(
+      (permission) => !currentPermissionIds.has(permission.id)
+    );
+
+    if (missingPermissions.length > 0) {
+      await Promise.all(
+        missingPermissions.map((permission) =>
+          FirestoreService.createInSubcollection(
+            ROLES_COLLECTION,
+            role.id,
+            ROLE_PERMISSIONS_SUBCOLLECTION,
+            {
+              id: permission.id,
+              name: permission.name,
+              value: permission.value,
+              moduleId: permission.moduleId,
+              type: permission.type as AccessEntityType,
+            }
+          )
+        )
+      );
+    }
+
+    if (
+      missingPermissions.length > 0 ||
+      role.permissionsCount !== compatiblePermissions.length ||
+      role.name !== definition.name ||
+      role.type !== definition.type
+    ) {
+      await FirestoreService.update(ROLES_COLLECTION, role.id, {
+        name: definition.name,
+        type: definition.type,
+        permissionsCount: compatiblePermissions.length,
+        updatedAt: FirestoreDataBase.generateTimeStamp(),
+      });
+    }
+
+    return await FirestoreService.getById<Role>(ROLES_COLLECTION, role.id);
   }
 
   private async markMembershipsAsInactiveByBusiness(

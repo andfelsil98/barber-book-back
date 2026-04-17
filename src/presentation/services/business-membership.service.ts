@@ -20,6 +20,7 @@ import {
   type PaginationParams,
   MAX_PAGE_SIZE,
 } from "../../domain/interfaces/pagination.interface";
+import { isAdminProtectedRole } from "../../domain/constants/protected-role.constants";
 import { BusinessUsageLimitService } from "./business-usage-limit.service";
 import FirestoreService from "./firestore.service";
 import { RoleService } from "./role.service";
@@ -536,13 +537,22 @@ export class BusinessMembershipService {
             "No se puede activar una membresía sin un rol asociado"
           );
         }
-      } else if (membership.isEmployee === true) {
-        const employeeIdentifiers = await this.resolveMembershipUserIdentifiers(
-          membership.userId
-        );
-        await this.schedulingIntegrityService.ensureEmployeeCanBeDeleted(
-          employeeIdentifiers
-        );
+      } else {
+        await this.ensureBusinessRetainsAdminMembership({
+          membership,
+          nextStatus: newStatus,
+          errorMessage:
+            "Cada negocio debe tener al menos una persona ACTIVE con el rol Admin. No puedes inactivar al único Admin del negocio.",
+        });
+
+        if (membership.isEmployee === true) {
+          const employeeIdentifiers = await this.resolveMembershipUserIdentifiers(
+            membership.userId
+          );
+          await this.schedulingIntegrityService.ensureEmployeeCanBeDeleted(
+            employeeIdentifiers
+          );
+        }
       }
 
       const payload = {
@@ -685,6 +695,14 @@ export class BusinessMembershipService {
       }
       const role = roles[0]!;
 
+      await this.ensureBusinessRetainsAdminMembership({
+        membership: targetMembership,
+        nextRole: role,
+        nextStatus: targetMembership.status,
+        errorMessage:
+          "Cada negocio debe tener al menos una persona ACTIVE con el rol Admin. No puedes cambiar el rol del único Admin del negocio.",
+      });
+
       if (targetBusinessId === "") {
         if (!isGlobalRoleType(role.type)) {
           throw CustomError.badRequest(
@@ -823,6 +841,55 @@ export class BusinessMembershipService {
       businessId: normalizedBusinessId,
       isEmployee: false,
     };
+  }
+
+  private async getRoleById(roleId: string): Promise<Role | null> {
+    const normalizedRoleId = roleId.trim();
+    if (normalizedRoleId === "") return null;
+
+    const roles = await FirestoreService.getAll<Role>(ROLE_COLLECTION, [
+      { field: "id", operator: "==", value: normalizedRoleId },
+    ]);
+    return roles[0] ?? null;
+  }
+
+  private async ensureBusinessRetainsAdminMembership(input: {
+    membership: BusinessMembership;
+    nextRole?: Role | null;
+    nextStatus: BusinessMembership["status"];
+    errorMessage: string;
+  }): Promise<void> {
+    const businessId = input.membership.businessId?.trim() ?? "";
+    if (businessId === "") return;
+    if (input.membership.status !== "ACTIVE") return;
+
+    const currentRoleId = input.membership.roleId?.trim() ?? "";
+    if (currentRoleId === "") return;
+
+    const currentRole = await this.getRoleById(currentRoleId);
+    if (!currentRole || !isAdminProtectedRole(currentRole)) return;
+
+    const willRemainAdmin =
+      input.nextStatus === "ACTIVE" &&
+      input.nextRole != null &&
+      isAdminProtectedRole(input.nextRole);
+    if (willRemainAdmin) return;
+
+    const activeAdminMemberships = await FirestoreService.getAll<BusinessMembership>(
+      COLLECTION_NAME,
+      [
+        { field: "businessId", operator: "==", value: businessId },
+        { field: "roleId", operator: "==", value: currentRole.id },
+        { field: "status", operator: "==", value: "ACTIVE" },
+      ]
+    );
+
+    const hasAnotherActiveAdmin = activeAdminMemberships.some(
+      (membership) => membership.id !== input.membership.id
+    );
+    if (!hasAnotherActiveAdmin) {
+      throw CustomError.badRequest(input.errorMessage);
+    }
   }
 
   private async resolveMembershipUser(membershipUserId: string): Promise<User> {
