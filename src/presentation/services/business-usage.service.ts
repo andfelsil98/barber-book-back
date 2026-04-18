@@ -100,25 +100,37 @@ export class BusinessUsageService {
     }
 
     const plan = await this.ensurePlanExists(input.planId);
-    const periods = buildUsagePeriods(input.startPeriods, plan.billingInterval);
     const today = getCurrentBogotaDate();
+    const existingUsages = await this.getUsages(businessId);
+    const preservedUsages = existingUsages
+      .filter((usage) => usage.endPeriod < today)
+      .map((usage) => ({
+        ...usage,
+        status: "INACTIVE" as const,
+        nextStatusChangeDate: null,
+      }));
+    const preservedStartPeriods = new Set(
+      preservedUsages.map((usage) => usage.startPeriod)
+    );
+    const editableStartPeriods = input.startPeriods.filter(
+      (startPeriod) => !preservedStartPeriods.has(startPeriod)
+    );
+    const periods = buildUsagePeriods(editableStartPeriods, plan.billingInterval);
     const activePeriod =
       periods.find((period) => isDateWithinPeriod(today, period.startPeriod, period.endPeriod)) ??
       null;
-    const [existingUsages, activeUsageCounts] = await Promise.all([
-      this.getUsages(businessId),
+    const activeUsageCounts =
       activePeriod != null
-        ? this.loadCurrentResourceCounts({
+        ? await this.loadCurrentResourceCounts({
             businessId,
             bookingStartPeriod: activePeriod.startPeriod,
             bookingEndPeriod: today,
           })
-        : Promise.resolve(null),
-    ]);
+        : null;
     const activeUsageRemaining =
       activeUsageCounts != null ? this.buildRemainingQuota(activeUsageCounts, plan) : null;
 
-    const usages = periods.map(({ startPeriod, endPeriod }) => {
+    const rebuiltUsages = periods.map(({ startPeriod, endPeriod }) => {
       const isActive = isDateWithinPeriod(today, startPeriod, endPeriod);
       const remaining =
         isActive && activeUsageRemaining != null
@@ -140,8 +152,11 @@ export class BusinessUsageService {
         ),
       } satisfies UsageRecord;
     });
+    const usages = [...preservedUsages, ...rebuiltUsages].sort((a, b) =>
+      a.startPeriod.localeCompare(b.startPeriod)
+    );
 
-    const subscriptionStatus: Business["subscriptionStatus"] = usages.some(
+    const subscriptionStatus: Business["subscriptionStatus"] = rebuiltUsages.some(
       (usage) => usage.status === "ACTIVE"
     )
       ? "ACTIVE"

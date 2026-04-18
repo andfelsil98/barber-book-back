@@ -279,7 +279,7 @@ export class BusinessService {
         ]
       );
       if (businessWithSameConsecutivePrefix.length > 0) {
-        throw CustomError.conflict("Ya existe un negocio con este consecutivePrefix");
+        throw CustomError.conflict("Ya existe un negocio con este prefijo de agendamientos");
       }
       const createdBusiness = await this.createBusinessWithReservedSlug(dto);
       createdBusinessId = createdBusiness.id;
@@ -358,7 +358,7 @@ export class BusinessService {
           businessesWithSameConsecutivePrefix.filter((business) => business.id !== id);
         if (otherBusinessWithSameConsecutivePrefix.length > 0) {
           throw CustomError.conflict(
-            "Ya existe un negocio con este consecutivePrefix"
+            "Ya existe un negocio con este prefijo de agendamientos"
           );
         }
       }

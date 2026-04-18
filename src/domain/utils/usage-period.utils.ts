@@ -7,6 +7,10 @@ export type BillingIntervalInput =
 
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
+function resolveFieldLabel(field: string): string {
+  return field === "startPeriods" ? "periodos de inicio" : field;
+}
+
 function formatDate(year: number, month: number, day: number): string {
   return [
     String(year).padStart(4, "0"),
@@ -129,12 +133,14 @@ export function validateAndNormalizeStartPeriods(
   value: unknown,
   field: string
 ): string[] {
+  const fieldLabel = resolveFieldLabel(field);
+
   if (!Array.isArray(value)) {
-    throw CustomError.badRequest(`${field} debe ser un arreglo de fechas YYYY-MM-DD`);
+    throw CustomError.badRequest(`${fieldLabel} debe ser un arreglo de fechas YYYY-MM-DD`);
   }
 
   if (value.length === 0) {
-    throw CustomError.badRequest(`${field} debe contener al menos una fecha`);
+    throw CustomError.badRequest(`${fieldLabel} debe contener al menos una fecha`);
   }
 
   const startPeriods = value.map((item, index) =>
@@ -143,7 +149,7 @@ export function validateAndNormalizeStartPeriods(
 
   const uniqueStartPeriods = new Set(startPeriods);
   if (uniqueStartPeriods.size !== startPeriods.length) {
-    throw CustomError.badRequest(`${field} no puede contener fechas repetidas`);
+    throw CustomError.badRequest(`${fieldLabel} no pueden contener fechas repetidas`);
   }
 
   return [...startPeriods].sort((a, b) => a.localeCompare(b));
@@ -163,7 +169,7 @@ export function buildUsagePeriods(
       const previousEndPeriod = computeEndPeriod(previous, billingInterval);
       if (startPeriod <= previousEndPeriod) {
         throw CustomError.badRequest(
-          "Los startPeriods no pueden solaparse entre sí"
+          "Los periodos de inicio no pueden solaparse entre sí"
         );
       }
     }
