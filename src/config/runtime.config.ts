@@ -3,7 +3,7 @@ export const infobipRuntimeConfig = {
 } as const;
 
 export const outboxProcessorRuntimeConfig = {
-  enabled: true,
+  enabled: false,
   intervalMs: 15000,
   batchSize: 20,
   processingTimeoutSeconds: 300,

@@ -98,6 +98,13 @@ Comportamiento relevante:
 - `CLOUD_TASKS_TARGET_BASE_URL`
 - `CLOUD_TASKS_INTERNAL_TOKEN`
 
+### Outbox
+
+- El procesamiento del outbox se ejecuta por HTTP en `POST /outbox/process`.
+- Las eliminaciones de negocio programan una Cloud Task inmediata contra ese endpoint.
+- En dev existe el Cloud Scheduler `outbox-process-dev`, que llama `/outbox/process?limit=20` cada minuto como respaldo.
+- El runner en memoria queda desactivado para no depender de CPU idle en Cloud Run.
+
 ### Frontend / Push
 
 - `FRONTEND_APP_BASE_URL`

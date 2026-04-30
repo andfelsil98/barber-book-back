@@ -43,6 +43,7 @@ import type { BranchService } from "./branch.service";
 import { FirestoreConsistencyService } from "./firestore-consistency.service";
 import FirestoreService from "./firestore.service";
 import { OutboxService } from "./outbox.service";
+import type { OutboxProcessTrigger } from "./outbox-process-trigger.service";
 import type { ServiceService } from "./service.service";
 import type { UserService } from "./user.service";
 
@@ -156,7 +157,8 @@ export class BusinessService {
       new BusinessUsageLimitService(),
     private readonly firestoreConsistencyService: FirestoreConsistencyService =
       new FirestoreConsistencyService(),
-    private readonly outboxService: OutboxService = new OutboxService()
+    private readonly outboxService: OutboxService = new OutboxService(),
+    private readonly outboxProcessTrigger?: OutboxProcessTrigger
   ) {}
 
   async getAllBusinesses(
@@ -446,6 +448,7 @@ export class BusinessService {
         completed: false,
         eventId: nextEventId,
       });
+      await this.enqueueBusinessDeletionOutboxProcessing(id, nextEventId);
 
       return this.normalizeBusiness(
         await FirestoreService.getById<BusinessRecord>(COLLECTION_NAME, id)
@@ -460,6 +463,26 @@ export class BusinessService {
     }
   }
 
+  private async enqueueBusinessDeletionOutboxProcessing(
+    businessId: string,
+    eventId: string
+  ): Promise<void> {
+    if (this.outboxProcessTrigger == null) {
+      return;
+    }
+
+    await this.outboxProcessTrigger
+      .enqueueProcessBatch({
+        reason: `business-delete-cascade:${businessId}:${eventId}`,
+      })
+      .catch((error) => {
+        const detail = error instanceof Error ? error.stack ?? error.message : String(error);
+        logger.warn(
+          `[BusinessService] No se pudo programar procesamiento inmediato de outbox para eliminación del negocio ${businessId}. eventId=${eventId}. detalle=${detail}`
+        );
+      });
+  }
+
   async replayBusinessDeletionCascadeEvent(
     input: BusinessDeletionOutboxPayload
   ): Promise<void> {
@@ -472,6 +495,7 @@ export class BusinessService {
   ): Promise<void> {
     let deletionStage: BusinessDeletionStage | "load-business" = "load-business";
     let deletionContextSummary: BusinessDeletionSummary | null = null;
+    let deletionContext: BusinessDeletionContext | null = null;
     let canPersistDeletionProgress = false;
 
     try {
@@ -497,6 +521,14 @@ export class BusinessService {
       deletionStage = "load-deletion-context";
       for (const stage of BUSINESS_DELETION_STAGES.slice(deletionStartIndex)) {
         deletionStage = stage;
+        if (
+          this.businessDeletionStageRequiresContext(stage) &&
+          deletionContext == null
+        ) {
+          deletionContext = await this.loadBusinessDeletionContext(id);
+          deletionContextSummary = this.buildBusinessDeletionSummary(deletionContext);
+        }
+
         await this.persistBusinessDeletionProgress(id, {
           status: "RUNNING",
           stage,
@@ -514,7 +546,7 @@ export class BusinessService {
             break;
 
           case "load-deletion-context": {
-            const deletionContext = await this.loadBusinessDeletionContext(id);
+            deletionContext = await this.loadBusinessDeletionContext(id);
             deletionContextSummary = this.buildBusinessDeletionSummary(deletionContext);
             await this.persistBusinessDeletionProgress(id, {
               status: "RUNNING",
@@ -531,16 +563,11 @@ export class BusinessService {
           }
 
           default: {
-            const deletionContext = await this.loadBusinessDeletionContext(id);
-            deletionContextSummary = this.buildBusinessDeletionSummary(deletionContext);
-            await this.persistBusinessDeletionProgress(id, {
-              status: "RUNNING",
+            await this.runBusinessDeletionStage(
               stage,
-              summary: deletionContextSummary,
-              clearLastError: true,
-            });
-
-            await this.runBusinessDeletionStage(stage, id, deletionContext);
+              id,
+              deletionContext ?? this.buildEmptyBusinessDeletionContext()
+            );
             break;
           }
         }
@@ -592,6 +619,45 @@ export class BusinessService {
       );
       throw CustomError.internalServerError("Error interno del servidor");
     }
+  }
+
+  private businessDeletionStageRequiresContext(
+    stage: (typeof BUSINESS_DELETION_STAGES)[number]
+  ): boolean {
+    switch (stage) {
+      case "delete-appointment-status-tasks":
+      case "delete-reviews":
+      case "delete-metrics":
+      case "delete-user-business-membership-links":
+      case "delete-business-memberships":
+      case "delete-roles":
+      case "delete-appointments":
+      case "delete-bookings":
+      case "delete-services":
+      case "delete-branches":
+        return true;
+
+      case "mark-business-as-deleted":
+      case "load-deletion-context":
+      case "delete-business-usage":
+      case "delete-storage-folder":
+      case "release-business-slug":
+        return false;
+    }
+  }
+
+  private buildEmptyBusinessDeletionContext(): BusinessDeletionContext {
+    return {
+      appointmentIds: [],
+      bookingIds: [],
+      branchIds: [],
+      membershipIds: [],
+      metricIds: [],
+      reviewIds: [],
+      roleIds: [],
+      serviceIds: [],
+      users: [],
+    };
   }
 
   private async markBusinessAsDeletedForCascade(

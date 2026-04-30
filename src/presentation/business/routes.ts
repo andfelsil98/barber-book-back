@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { envs } from "../../config/envs";
+import { outboxProcessorRuntimeConfig } from "../../config/runtime.config";
 import { createGoogleCloudTasksQueueProvider } from "../../infrastructure/tasks/google-cloud-tasks.factory";
 import { AppointmentStatusTaskSchedulerService } from "../services/appointment-status-task-scheduler.service";
 import { BusinessUsageReconcileController } from "./business-usage-reconcile.controller";
@@ -7,6 +8,7 @@ import { BusinessController } from "./business.controller";
 import { BranchService } from "../services/branch.service";
 import { BusinessService } from "../services/business.service";
 import { BusinessUsageService } from "../services/business-usage.service";
+import { OutboxProcessTriggerService } from "../services/outbox-process-trigger.service";
 import { ServiceService } from "../services/service.service";
 import { UserService } from "../services/user.service";
 
@@ -23,12 +25,24 @@ export class BusinessRoutes {
         internalToken: envs.CLOUD_TASKS_INTERNAL_TOKEN,
       });
     const businessUsageService = new BusinessUsageService();
+    const outboxProcessTriggerService = new OutboxProcessTriggerService(
+      cloudTasksProvider,
+      {
+        targetBaseUrl: envs.CLOUD_TASKS_TARGET_BASE_URL,
+        internalToken: envs.CLOUD_TASKS_INTERNAL_TOKEN,
+        defaultLimit: outboxProcessorRuntimeConfig.batchSize,
+      }
+    );
     const businessService = new BusinessService(
       serviceService,
       branchService,
       userService,
       appointmentStatusTaskScheduler,
-      businessUsageService
+      businessUsageService,
+      undefined,
+      undefined,
+      undefined,
+      outboxProcessTriggerService
     );
     const businessController = new BusinessController(businessService);
     const businessUsageReconcileController = new BusinessUsageReconcileController(
