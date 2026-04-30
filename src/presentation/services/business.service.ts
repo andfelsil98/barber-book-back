@@ -84,6 +84,7 @@ const BUSINESS_DELETION_STAGES = [
   "delete-services",
   "delete-branches",
   "delete-storage-folder",
+  "release-business-slug",
 ] as const;
 const BUSINESS_DELETION_TERMINAL_STAGE = "COMPLETED" as const;
 
@@ -111,18 +112,6 @@ function normalizeUniqueStrings(values: Array<string | null | undefined>): strin
         .filter((value) => value !== "")
     )
   );
-}
-
-function shouldSkipStorageCleanup(error: unknown): boolean {
-  const detail =
-    error instanceof Error
-      ? error.message
-      : typeof error === "string"
-        ? error
-        : JSON.stringify(error);
-
-  const normalizedDetail = detail.toLowerCase();
-  return normalizedDetail.includes("bucket name not specified or invalid");
 }
 
 interface FirestoreEntityWithId {
@@ -518,6 +507,10 @@ export class BusinessService {
         switch (stage) {
           case "mark-business-as-deleted":
             await this.markBusinessAsDeletedForCascade(business, actorDocument);
+            break;
+
+          case "release-business-slug":
+            await this.releaseBusinessSlugReservationForBusiness(id);
             break;
 
           case "load-deletion-context": {
@@ -917,6 +910,41 @@ export class BusinessService {
       .delete();
   }
 
+  private async releaseBusinessSlugReservationForBusiness(
+    businessId: string
+  ): Promise<void> {
+    const business = await FirestoreService.getById<BusinessRecord>(
+      COLLECTION_NAME,
+      businessId
+    );
+    const slug = business.slug?.trim() ?? "";
+    if (slug === "") {
+      return;
+    }
+
+    await this.firestoreConsistencyService.runTransaction(
+      "BusinessService.releaseBusinessSlugReservationForBusiness",
+      async (context) => {
+        const slugRef = context.doc(BUSINESS_SLUGS_COLLECTION, slug);
+        const snapshot = await context.transaction.get(slugRef);
+        if (!snapshot.exists) {
+          return;
+        }
+
+        const reservation = snapshot.data() as { businessId?: string } | undefined;
+        const reservedBusinessId = reservation?.businessId?.trim() ?? "";
+        if (reservedBusinessId !== "" && reservedBusinessId !== businessId) {
+          logger.warn(
+            `[BusinessService] No se libera el slug ${slug} durante la eliminación del negocio ${businessId} porque pertenece al negocio ${reservedBusinessId}`
+          );
+          return;
+        }
+
+        context.transaction.delete(slugRef);
+      }
+    );
+  }
+
   private async ensureCreatorMembership(
     businessId: string,
     creatorDocument: string
@@ -1121,19 +1149,8 @@ export class BusinessService {
 
   private async deleteBusinessStorageFolder(businessId: string): Promise<void> {
     const storagePrefix = `bussinesses/${businessId}/`;
-    try {
-      const bucket = FirestoreDataBase.getAdmin().storage().bucket();
-      await bucket.deleteFiles({ prefix: storagePrefix });
-    } catch (error) {
-      if (shouldSkipStorageCleanup(error)) {
-        const detail = error instanceof Error ? error.message : String(error);
-        logger.warn(
-          `[BusinessService] Se omite la limpieza de storage del negocio ${businessId} porque no hay bucket configurado o válido. detalle=${detail}`
-        );
-        return;
-      }
-      throw error;
-    }
+    const bucket = FirestoreDataBase.getAdmin().storage().bucket();
+    await bucket.deleteFiles({ prefix: storagePrefix });
   }
 
   private async getExistingStartPeriods(businessId: string): Promise<string[]> {

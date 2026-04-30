@@ -5,6 +5,7 @@ import env from "env-var";
 export const envs = {
   PORT: env.get("PORT").required().asPortNumber(),
   FIREBASE_CREDENTIALS_PATH: env.get("FIREBASE_CREDENTIALS_PATH").required().asString(),
+  FIREBASE_STORAGE_BUCKET: env.get("FIREBASE_STORAGE_BUCKET").default("").asString(),
   ENV: env.get("ENV").required().asString(),
   INFOBIP_BASE_URL: env
     .get("INFOBIP_BASE_URL")
@@ -18,10 +19,6 @@ export const envs = {
     .get("INFOBIP_WHATSAPP_SENDER")
     .default("REPLACE_ME_WHATSAPP_SENDER")
     .asString(),
-  INFOBIP_TIMEOUT_MS: env
-    .get("INFOBIP_TIMEOUT_MS")
-    .default("10000")
-    .asInt(),
   CLOUD_TASKS_PROJECT_ID: env
     .get("CLOUD_TASKS_PROJECT_ID")
     .default("REPLACE_ME_PROJECT_ID")
@@ -46,30 +43,6 @@ export const envs = {
     .get("CLOUD_TASKS_INTERNAL_TOKEN")
     .default("REPLACE_ME_INTERNAL_TASK_TOKEN")
     .asString(),
-  OUTBOX_PROCESSOR_ENABLED: env
-    .get("OUTBOX_PROCESSOR_ENABLED")
-    .default("true")
-    .asBool(),
-  OUTBOX_PROCESSOR_INTERVAL_MS: env
-    .get("OUTBOX_PROCESSOR_INTERVAL_MS")
-    .default("15000")
-    .asInt(),
-  OUTBOX_PROCESSOR_BATCH_SIZE: env
-    .get("OUTBOX_PROCESSOR_BATCH_SIZE")
-    .default("20")
-    .asInt(),
-  OUTBOX_PROCESSOR_PROCESSING_TIMEOUT_SECONDS: env
-    .get("OUTBOX_PROCESSOR_PROCESSING_TIMEOUT_SECONDS")
-    .default("300")
-    .asInt(),
-  OUTBOX_PROCESSOR_RETRY_BASE_DELAY_SECONDS: env
-    .get("OUTBOX_PROCESSOR_RETRY_BASE_DELAY_SECONDS")
-    .default("15")
-    .asInt(),
-  OUTBOX_PROCESSOR_RETRY_MAX_DELAY_SECONDS: env
-    .get("OUTBOX_PROCESSOR_RETRY_MAX_DELAY_SECONDS")
-    .default("900")
-    .asInt(),
   FRONTEND_APP_BASE_URL: env
     .get("FRONTEND_APP_BASE_URL")
     .default("http://localhost:5173")

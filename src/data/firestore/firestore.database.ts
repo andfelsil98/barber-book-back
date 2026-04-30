@@ -1,7 +1,9 @@
 import admin from "firebase-admin";
+import type { ServiceAccount } from "firebase-admin";
 import { Timestamp } from 'firebase-admin/firestore';
 interface ConnectionOptions {
-  credential: string;
+  credential: string | ServiceAccount;
+  storageBucket?: string;
 }
 
 export class FirestoreDataBase {
@@ -11,9 +13,14 @@ export class FirestoreDataBase {
     const { credential } = options;
     if (!this.dbInstance){
       try {
-        admin.initializeApp({
+        const storageBucket = options.storageBucket?.trim();
+        const appOptions: admin.AppOptions = {
           credential: admin.credential.cert(credential),
-        });
+        };
+        if (storageBucket != null && storageBucket !== "") {
+          appOptions.storageBucket = storageBucket;
+        }
+        admin.initializeApp(appOptions);
         this.dbInstance = admin.firestore();
          this.isInitialized = true;
         console.log("🔥 Firestore conectado correctamente");

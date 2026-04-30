@@ -4,6 +4,7 @@ import { AppRoutes } from './presentation/routes';
 import { Server } from './presentation/server';
 import { createOutboxProcessorService } from './presentation/outbox/outbox.factory';
 import { OutboxProcessorRunnerService } from './presentation/services/outbox-processor-runner.service';
+import { outboxProcessorRuntimeConfig } from './config/runtime.config';
 import fs from 'fs';
 
 
@@ -21,7 +22,8 @@ async function main() {
     fs.readFileSync(envs.FIREBASE_CREDENTIALS_PATH, 'utf-8')
   );
   await FirestoreDataBase.connect({
-    credential: firebaseCredentials
+    credential: firebaseCredentials,
+    storageBucket: envs.FIREBASE_STORAGE_BUCKET,
   })
   const server = new Server({
     port: envs.PORT,
@@ -29,12 +31,12 @@ async function main() {
   })  
   server.start();
 
-  if (envs.OUTBOX_PROCESSOR_ENABLED) {
+  if (outboxProcessorRuntimeConfig.enabled) {
     const outboxProcessorService = createOutboxProcessorService();
     const outboxProcessorRunner = new OutboxProcessorRunnerService(
       outboxProcessorService,
       {
-        intervalMs: envs.OUTBOX_PROCESSOR_INTERVAL_MS,
+        intervalMs: outboxProcessorRuntimeConfig.intervalMs,
       }
     );
     outboxProcessorRunner.start();

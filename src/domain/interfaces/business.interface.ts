@@ -31,6 +31,7 @@ export interface BusinessDeletionState {
     | "delete-services"
     | "delete-branches"
     | "delete-storage-folder"
+    | "release-business-slug"
     | "COMPLETED";
   eventId?: string;
   summary?: BusinessDeletionSummary;

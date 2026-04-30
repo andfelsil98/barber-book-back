@@ -1,4 +1,5 @@
 import { envs } from "../../config/envs";
+import { outboxProcessorRuntimeConfig } from "../../config/runtime.config";
 import { createGoogleCloudTasksQueueProvider } from "../../infrastructure/tasks/google-cloud-tasks.factory";
 import { createWhatsAppService } from "../../infrastructure/whatsapp/whatsapp.service.factory";
 import { AppointmentStatusTaskSchedulerService } from "../services/appointment-status-task-scheduler.service";
@@ -45,10 +46,11 @@ export function createOutboxProcessorService(): OutboxProcessorService {
     businessService,
     undefined,
     {
-      batchSize: envs.OUTBOX_PROCESSOR_BATCH_SIZE,
-      processingTimeoutSeconds: envs.OUTBOX_PROCESSOR_PROCESSING_TIMEOUT_SECONDS,
-      retryBaseDelaySeconds: envs.OUTBOX_PROCESSOR_RETRY_BASE_DELAY_SECONDS,
-      retryMaxDelaySeconds: envs.OUTBOX_PROCESSOR_RETRY_MAX_DELAY_SECONDS,
+      batchSize: outboxProcessorRuntimeConfig.batchSize,
+      processingTimeoutSeconds:
+        outboxProcessorRuntimeConfig.processingTimeoutSeconds,
+      retryBaseDelaySeconds: outboxProcessorRuntimeConfig.retryBaseDelaySeconds,
+      retryMaxDelaySeconds: outboxProcessorRuntimeConfig.retryMaxDelaySeconds,
     }
   );
 }

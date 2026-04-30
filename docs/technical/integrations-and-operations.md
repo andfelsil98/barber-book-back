@@ -80,6 +80,7 @@ Comportamiento relevante:
 
 - `PORT`
 - `FIREBASE_CREDENTIALS_PATH`
+- `FIREBASE_STORAGE_BUCKET`
 - `ENV`
 
 ### WhatsApp / Infobip
@@ -87,7 +88,6 @@ Comportamiento relevante:
 - `INFOBIP_BASE_URL`
 - `INFOBIP_API_KEY`
 - `INFOBIP_WHATSAPP_SENDER`
-- `INFOBIP_TIMEOUT_MS`
 
 ### Cloud Tasks
 

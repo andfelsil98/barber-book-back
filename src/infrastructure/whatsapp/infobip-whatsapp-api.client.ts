@@ -302,7 +302,7 @@ export class InfobipWhatsAppApiClient implements WhatsAppMessageProvider {
     if (this.isUnset(this.config.apiKey)) missing.push("INFOBIP_API_KEY");
     if (this.isUnset(this.config.sender)) missing.push("INFOBIP_WHATSAPP_SENDER");
     if (!Number.isFinite(this.config.timeoutMs) || this.config.timeoutMs <= 0) {
-      missing.push("INFOBIP_TIMEOUT_MS");
+      missing.push("infobipRuntimeConfig.timeoutMs");
     }
 
     if (missing.length > 0) {
